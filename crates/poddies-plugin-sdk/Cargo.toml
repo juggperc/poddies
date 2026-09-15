@@ -1,0 +1,10 @@
+[package]
+name = "poddies-plugin-sdk"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+description = "Authoring SDK for Poddies plugins: implement a trait, export the ABI, done."
+
+[dependencies]
+poddies-plugin-api = { path = "../poddies-plugin-api" }
+serde_json = "1.0.151"

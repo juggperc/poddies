@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Poddies</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app" class="app">
+      <div class="bloom" aria-hidden="true"></div>
+
+      <div class="app__content">
+        <header class="titlebar">
+          <img class="titlebar__logo" src="/logo-mark.png" alt="Poddies" draggable="false" />
+          <div class="titlebar__spacer"></div>
+
+          <span id="status" class="titlebar__status" role="status" aria-live="polite"></span>
+
+          <button id="btn-refresh" class="tb-btn" title="Check for new episodes" aria-label="Check for new episodes">
+            <svg width="13" height="13" viewBox="0 0 13 13" aria-hidden="true" fill="none">
+              <path d="M11 6.5a4.5 4.5 0 1 1-1.4-3.26" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+              <path d="M11 1.4v3.1H7.9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+          <button id="btn-settings" class="tb-btn" title="Settings" aria-label="Settings">
+            <svg width="13" height="13" viewBox="0 0 13 13" aria-hidden="true" fill="none">
+              <circle cx="6.5" cy="6.5" r="2" stroke="currentColor" stroke-width="1.3" />
+              <path d="M6.5 1v1.6M6.5 10.4V12M1 6.5h1.6M10.4 6.5H12M2.6 2.6l1.1 1.1M9.3 9.3l1.1 1.1M10.4 2.6L9.3 3.7M3.7 9.3l-1.1 1.1" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" />
+            </svg>
+          </button>
+
+          <div class="titlebar__controls">
+            <button id="btn-minimize" class="tb-btn" title="Minimise to tray" aria-label="Minimise to tray">
+              <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                <path d="M0.5 5h9" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" />
+              </svg>
+            </button>
+            <button id="btn-close" class="tb-btn" title="Close to tray" aria-label="Close to tray">
+              <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                <path d="M1 1l8 8M9 1L1 9" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" />
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <main class="panes">
+          <nav id="pane-library" class="pane pane--library" aria-label="Library"></nav>
+          <section id="pane-middle" class="pane pane--middle" aria-label="Content"></section>
+          <aside id="pane-now" class="pane pane--now" aria-label="Now playing"></aside>
+        </main>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

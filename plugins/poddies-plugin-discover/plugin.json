@@ -1,0 +1,10 @@
+{
+  "id": "dev.poddies.discover",
+  "name": "Discover",
+  "version": "0.1.0",
+  "protocol": "1.0",
+  "description": "Surfaces candidate shows from the public iTunes Search API, with a curated offline fallback.",
+  "author": "Poddies",
+  "capabilities": ["discovery-source"],
+  "runtime": { "kind": "native", "library": "poddies_plugin_discover.dll" }
+}

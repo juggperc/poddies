@@ -1,0 +1,11 @@
+[package]
+name = "poddies-cli"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+description = "Scaffold, validate and hot-reload Poddies plugins."
+
+[dependencies]
+poddies-plugin-api = { path = "../poddies-plugin-api" }
+poddies-plugin-host = { path = "../poddies-plugin-host" }
+serde_json = "1.0.151"

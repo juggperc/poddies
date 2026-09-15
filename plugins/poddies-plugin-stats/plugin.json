@@ -1,0 +1,10 @@
+{
+  "id": "dev.poddies.stats",
+  "name": "Listening Stats",
+  "version": "0.1.0",
+  "protocol": "1.0",
+  "description": "Listening statistics computed from your own library.",
+  "author": "Poddies",
+  "capabilities": ["ui-panel", "library-read"],
+  "runtime": { "kind": "native", "library": "poddies_plugin_stats.dll" }
+}

@@ -1,0 +1,18 @@
+# Rust
+/target
+
+# Frontend
+node_modules/
+dist/
+
+# Built plugin artefacts, copied next to their manifests by `poddies dev`
+plugins/*/*.dll
+plugins/*/*.so
+plugins/*/*.dylib
+
+# Python
+__pycache__/
+*.pyc
+
+# Screenshots and scratch
+*.tmp

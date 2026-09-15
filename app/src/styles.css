@@ -1,0 +1,1443 @@
+/* ==========================================================================
+   Poddies — "Paper neutral"
+   A deliberately monochrome world. There is no accent colour anywhere: rank,
+   selection and state are expressed through tone, weight and space, and the
+   only saturated pigment on screen comes from podcast artwork.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. Tokens
+   -------------------------------------------------------------------------- */
+/* --------------------------------------------------------------------------
+   1. Geist — the app face
+   Bundled locally (latin subset) so there is no network request at startup and
+   no system-font fallback drift between machines.
+   -------------------------------------------------------------------------- */
+@font-face {
+  font-family: "Geist Sans";
+  src: url("/fonts/geist-sans-latin-400-normal.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Sans";
+  src: url("/fonts/geist-sans-latin-500-normal.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Sans";
+  src: url("/fonts/geist-sans-latin-600-normal.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Sans";
+  src: url("/fonts/geist-sans-latin-700-normal.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("/fonts/geist-mono-latin-400-normal.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: dark light;
+
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --t-fast: 120ms;
+  --t-mid: 200ms;
+  --t-slow: 460ms;
+
+  --radius-window: 10px;
+  --radius: 7px;
+  --radius-sm: 5px;
+  --radius-pill: 999px;
+
+  --step-1: 4px;
+  --step-2: 8px;
+  --step-3: 12px;
+  --step-4: 16px;
+  --step-5: 22px;
+  --step-6: 30px;
+  --step-7: 40px;
+
+  /* A slightly negative tracking on display sizes: Geist is already tighter
+     than the system face, so this keeps headings from feeling cramped. */
+  --font-ui: "Geist Sans", "Segoe UI Variable Text", "Segoe UI", system-ui,
+    sans-serif;
+  --font-display: "Geist Sans", "Segoe UI Variable Display", "Segoe UI",
+    system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "Cascadia Mono", Consolas,
+    monospace;
+
+  --pane-library: 262px;
+  --pane-now: 316px;
+}
+
+/* Dark is the default: Mica dark is the most common desktop material. */
+:root {
+  --scrim: rgba(18, 18, 19, 0.72);
+
+  --surface-1: rgba(255, 255, 255, 0.028);
+  --surface-2: rgba(255, 255, 255, 0.055);
+  --surface-3: rgba(255, 255, 255, 0.09);
+
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.17);
+
+  --text-hi: rgba(255, 255, 255, 0.95);
+  --text-mid: rgba(255, 255, 255, 0.74);
+  --text-lo: rgba(255, 255, 255, 0.56);
+
+  --focus: rgba(255, 255, 255, 0.88);
+  --bloom-tint: 255, 255, 255;
+  --artwork-edge: rgba(255, 255, 255, 0.1);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --scrim: rgba(248, 248, 247, 0.72);
+
+    --surface-1: rgba(0, 0, 0, 0.028);
+    --surface-2: rgba(0, 0, 0, 0.055);
+    --surface-3: rgba(0, 0, 0, 0.085);
+
+    --line: rgba(0, 0, 0, 0.09);
+    --line-strong: rgba(0, 0, 0, 0.19);
+
+    --text-hi: rgba(0, 0, 0, 0.93);
+    --text-mid: rgba(0, 0, 0, 0.7);
+    --text-lo: rgba(0, 0, 0, 0.56);
+
+    --focus: rgba(0, 0, 0, 0.82);
+    --bloom-tint: 255, 255, 255;
+    --artwork-edge: rgba(0, 0, 0, 0.1);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   2. Base
+   -------------------------------------------------------------------------- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text-hi);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  user-select: none;
+  cursor: default;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: default;
+}
+
+input {
+  font: inherit;
+  color: inherit;
+}
+
+::selection {
+  background: var(--surface-3);
+}
+
+/* Scrollbars: present when needed, invisible when not. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  background-clip: content-box;
+  border: 3px solid transparent;
+  border-radius: var(--radius-pill);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-lo);
+  background-clip: content-box;
+}
+
+/* --------------------------------------------------------------------------
+   3. Shell
+   -------------------------------------------------------------------------- */
+.app {
+  position: fixed;
+  inset: 0;
+  background: var(--scrim);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-window);
+  overflow: hidden;
+}
+
+/* One wrapper so the reveal animation can blur and settle the content without
+   touching the window chrome. */
+.app__content {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  transform-origin: 50% 40%;
+}
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: var(--step-2);
+  height: 38px;
+  padding-left: var(--step-4);
+  border-bottom: 1px solid var(--line);
+}
+
+/* The wordmark ships with dark ink (it is legible on paper), so on the default
+   dark material it is inverted to the same near-white the UI text sits at.
+   No alpha is touched: the transparent surround stays out of the way. */
+.titlebar__logo {
+  height: 15px;
+  width: auto;
+  display: block;
+  flex-shrink: 0;
+  filter: invert(1);
+  opacity: 0.88;
+  transition: opacity var(--t-mid) var(--ease);
+  user-select: none;
+}
+
+.app:hover .titlebar__logo {
+  opacity: 1;
+}
+
+@media (prefers-color-scheme: light) {
+  .titlebar__logo {
+    filter: none;
+  }
+}
+
+.titlebar__spacer {
+  flex: 1;
+  align-self: stretch;
+}
+
+.titlebar__status {
+  font-size: 11.5px;
+  color: var(--text-lo);
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity var(--t-mid) var(--ease), transform var(--t-mid) var(--ease);
+  pointer-events: none;
+}
+
+.titlebar__status.is-visible {
+  opacity: 1;
+  transform: none;
+}
+
+.titlebar__controls {
+  display: flex;
+  align-self: stretch;
+}
+
+.tb-btn {
+  width: 44px;
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  color: var(--text-lo);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+
+.tb-btn:hover {
+  background: var(--surface-2);
+  color: var(--text-hi);
+}
+
+.tb-btn:active {
+  background: var(--surface-3);
+}
+
+/* --------------------------------------------------------------------------
+   4. Panes
+   -------------------------------------------------------------------------- */
+.panes {
+  display: grid;
+  grid-template-columns: var(--pane-library) minmax(0, 1fr) var(--pane-now);
+  min-height: 0;
+}
+
+.pane {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pane--library {
+  border-right: 1px solid var(--line);
+}
+
+.pane--now {
+  border-left: 1px solid var(--line);
+}
+
+.pane__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.pane__header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--step-2);
+  padding: var(--step-5) var(--step-5) var(--step-3);
+}
+
+.pane__title {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane__count {
+  font-size: 11.5px;
+  color: var(--text-lo);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.pane__subtitle {
+  margin: 0;
+  padding: 0 var(--step-5) var(--step-4);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-mid);
+  max-width: 62ch;
+}
+
+.section-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-lo);
+  padding: var(--step-4) var(--step-5) var(--step-2);
+}
+
+/* --------------------------------------------------------------------------
+   5. Library navigation
+   -------------------------------------------------------------------------- */
+.nav {
+  padding: var(--step-4) var(--step-3) var(--step-3);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.nav__item {
+  display: flex;
+  align-items: center;
+  gap: var(--step-3);
+  min-height: 38px;
+  padding: 0 var(--step-3);
+  border-radius: var(--radius);
+  color: var(--text-mid);
+  text-align: left;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+
+.nav__item:hover {
+  background: var(--surface-1);
+  color: var(--text-hi);
+}
+
+.nav__item[aria-current="true"] {
+  background: var(--surface-2);
+  color: var(--text-hi);
+  font-weight: 500;
+}
+
+.nav__thumb {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--artwork-edge);
+  object-fit: cover;
+  display: block;
+}
+
+.nav__glyph {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  color: var(--text-lo);
+}
+
+.nav__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.nav__meta {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-lo);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  margin: 0 9.5px;
+  border-radius: var(--radius-pill);
+  background: var(--text-mid);
+  flex-shrink: 0;
+}
+
+.status-dot--off {
+  background: none;
+  border: 1px solid var(--line-strong);
+}
+
+.plugin-path {
+  margin: var(--step-2) var(--step-5) var(--step-4);
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* Search sits at the top of the library pane, above the navigation. */
+.searchbox {
+  position: relative;
+  margin: 0 var(--step-3) var(--step-3);
+}
+
+.searchbox__input {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px 0 30px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface-1);
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text-hi);
+  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
+}
+
+.searchbox__input::placeholder {
+  color: var(--text-lo);
+}
+
+.searchbox__input:hover {
+  border-color: var(--line-strong);
+}
+
+.searchbox__input:focus {
+  outline: none;
+  background: var(--surface-2);
+  border-color: var(--text-lo);
+  box-shadow: 0 0 0 3px var(--surface-2);
+}
+
+/* The magnifier, drawn with a pseudo-element so no extra element is needed. */
+.searchbox::before {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  transform: translateY(-52%);
+  border: 1.4px solid var(--text-lo);
+  border-radius: var(--radius-pill);
+  pointer-events: none;
+  transition: border-color var(--t-fast) var(--ease);
+}
+
+.searchbox::after {
+  content: "";
+  position: absolute;
+  left: 18px;
+  top: 21px;
+  width: 5px;
+  height: 1.4px;
+  transform: rotate(45deg);
+  background: var(--text-lo);
+  border-radius: var(--radius-pill);
+  pointer-events: none;
+}
+
+.searchbox:focus-within::before {
+  border-color: var(--text-mid);
+}
+
+.searchbox:focus-within::after {
+  background: var(--text-mid);
+}
+
+.searchless {
+  margin: 0 var(--step-5) var(--step-4);
+  padding: var(--step-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 12px;
+  color: var(--text-mid);
+}
+
+/* A missing or broken image never leaves a hole in the layout. */
+.artwork-fallback {
+  display: block;
+  background: var(--surface-2);
+  border: 1px solid var(--artwork-edge);
+  border-radius: var(--radius-sm);
+}
+
+.artwork-fallback--lg {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--radius);
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: var(--step-2);
+  font-size: 12px;
+  color: var(--text-mid);
+  cursor: default;
+}
+
+.check input {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-1);
+  display: grid;
+  place-items: center;
+  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+
+.check input:hover {
+  border-color: var(--text-lo);
+}
+
+.check input:checked {
+  background: var(--text-mid);
+  border-color: var(--text-mid);
+}
+
+.check input:checked::after {
+  content: "";
+  width: 7px;
+  height: 4px;
+  border-left: 1.5px solid var(--scrim);
+  border-bottom: 1.5px solid var(--scrim);
+  transform: rotate(-45deg) translate(0, -1px);
+}
+
+.hairline {
+  height: 1px;
+  background: var(--line);
+  margin: var(--step-3) var(--step-5);
+}
+
+/* --------------------------------------------------------------------------
+   6. Episode rows
+   -------------------------------------------------------------------------- */
+.rows {
+  padding: 0 var(--step-3) var(--step-5);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--step-4);
+  padding: var(--step-3) var(--step-3);
+  min-height: 44px;
+  border-radius: var(--radius);
+  text-align: left;
+  transition: background var(--t-fast) var(--ease);
+}
+
+.row:hover {
+  background: var(--surface-1);
+}
+
+.row[aria-current="true"] {
+  background: var(--surface-2);
+}
+
+/* Discovery rows carry reason chips as well as meta, so they align from the
+   top rather than centring against a tall body. */
+.row--rich {
+  align-items: start;
+  padding-top: var(--step-3);
+  padding-bottom: var(--step-3);
+}
+
+.row__art {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  background: var(--surface-2);
+  border: 1px solid var(--artwork-edge);
+  display: block;
+}
+
+.row__body {
+  min-width: 0;
+}
+
+.row__title {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text-hi);
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.row--played .row__title {
+  color: var(--text-mid);
+  font-weight: 400;
+}
+
+.row__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--step-2);
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--text-lo);
+  font-variant-numeric: tabular-nums;
+}
+
+.row__meta > * + *::before {
+  content: "·";
+  margin-right: var(--step-2);
+  color: var(--line-strong);
+}
+
+.row__trailing {
+  font-size: 11.5px;
+  color: var(--text-lo);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.row__progress {
+  grid-column: 2 / -1;
+  height: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+  margin-top: var(--step-2);
+  overflow: hidden;
+}
+
+.row__progress > span {
+  display: block;
+  height: 100%;
+  background: var(--text-lo);
+  transition: width var(--t-slow) var(--ease);
+}
+
+/* --------------------------------------------------------------------------
+   7. Discovery
+   -------------------------------------------------------------------------- */
+/* A quiet pointer to the ranking controls, which live in Settings. */
+.discovery__tune {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--step-3);
+  margin: 0 var(--step-5) var(--step-4);
+  padding: 0 var(--step-1) 0 0;
+}
+
+.discovery__tune-text {
+  font-size: 11.5px;
+  color: var(--text-lo);
+}
+
+.link-btn {
+  font-size: 11.5px;
+  color: var(--text-mid);
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line-strong);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+
+.link-btn:hover {
+  background: var(--surface-2);
+  color: var(--text-hi);
+}
+
+.slider {
+  display: grid;
+  grid-template-columns: 106px minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: var(--step-3);
+  padding: 3px 0;
+}
+
+.slider__label {
+  font-size: 12px;
+  color: var(--text-mid);
+}
+
+.slider__value {
+  font-size: 11px;
+  color: var(--text-lo);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.slider input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 18px;
+  background: transparent;
+}
+
+.slider input[type="range"]::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+}
+
+.slider input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4.5px;
+  border-radius: var(--radius-pill);
+  background: var(--text-mid);
+  transition: transform var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+
+.slider input[type="range"]:hover::-webkit-slider-thumb {
+  transform: scale(1.22);
+  background: var(--text-hi);
+}
+
+.reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--step-2);
+  margin-top: var(--step-3);
+}
+
+.reason {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-lo);
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+}
+
+.reason__bar {
+  width: 26px;
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.reason__bar > span {
+  display: block;
+  height: 100%;
+  background: var(--text-lo);
+}
+
+.discovery__source {
+  font-size: 11px;
+  color: var(--text-lo);
+}
+
+/* --------------------------------------------------------------------------
+   8. Now playing
+   -------------------------------------------------------------------------- */
+.now {
+  padding: var(--step-5) var(--step-5) var(--step-6);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.now__art {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--radius);
+  object-fit: cover;
+  background: var(--surface-2);
+  border: 1px solid var(--artwork-edge);
+  display: block;
+}
+
+.now__art--empty {
+  display: grid;
+  place-items: center;
+  color: var(--text-lo);
+}
+
+.now__meta {
+  padding-top: var(--step-5);
+  min-height: 0;
+}
+
+.now__show {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  margin: 0 0 3px;
+  color: var(--text-hi);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.now__episode {
+  font-size: 13px;
+  color: var(--text-mid);
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.now__scrub {
+  margin-top: var(--step-5);
+  position: relative;
+  height: 24px;
+  display: flex;
+  align-items: center;
+}
+
+.now__scrub input[type="range"] {
+  width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 24px;
+  background: transparent;
+}
+
+.now__scrub input[type="range"]::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+}
+
+.now__scrub input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  margin-top: -5px;
+  border-radius: var(--radius-pill);
+  background: var(--text-hi);
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+}
+
+.now__scrub:hover input[type="range"]::-webkit-slider-thumb,
+.now__scrub input[type="range"]:focus-visible::-webkit-slider-thumb {
+  opacity: 1;
+}
+
+.now__times {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-lo);
+  font-variant-numeric: tabular-nums;
+  margin-top: -4px;
+}
+
+.now__transport {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--step-3);
+  margin-top: var(--step-5);
+}
+
+.transport-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-pill);
+  display: grid;
+  place-items: center;
+  color: var(--text-mid);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+}
+
+.transport-btn:hover {
+  background: var(--surface-2);
+  color: var(--text-hi);
+}
+
+.transport-btn:active {
+  transform: scale(0.94);
+}
+
+.transport-btn--primary {
+  width: 52px;
+  height: 52px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  color: var(--text-hi);
+}
+
+.transport-btn--primary:hover {
+  background: var(--surface-3);
+}
+
+.transport-btn[disabled] {
+  opacity: 0.35;
+}
+
+.transport-btn[disabled]:hover {
+  background: none;
+}
+
+.now__rate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  margin-top: var(--step-4);
+}
+
+.rate-btn {
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-lo);
+  padding: 5px 9px;
+  border-radius: var(--radius-pill);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+
+.rate-btn:hover {
+  background: var(--surface-1);
+  color: var(--text-hi);
+}
+
+.rate-btn[aria-pressed="true"] {
+  background: var(--surface-2);
+  color: var(--text-hi);
+}
+
+/* --------------------------------------------------------------------------
+   9. Plugin panels
+   -------------------------------------------------------------------------- */
+.widgets {
+  padding: 0 var(--step-5) var(--step-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--step-2);
+}
+
+.widget__heading {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text-hi);
+  padding-top: var(--step-3);
+}
+
+.widget__text {
+  font-size: 12.5px;
+  color: var(--text-mid);
+  max-width: 62ch;
+}
+
+.widget__divider {
+  height: 1px;
+  background: var(--line);
+  margin: var(--step-2) 0;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: var(--step-4) var(--step-4);
+  padding: var(--step-2) 0;
+}
+
+.metric__value {
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-hi);
+  line-height: 1.1;
+}
+
+.metric__label {
+  font-size: 11.5px;
+  color: var(--text-lo);
+  margin-top: 2px;
+}
+
+.bar {
+  padding: var(--step-2) 0;
+}
+
+.bar__head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-mid);
+  margin-bottom: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.bar__track {
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.bar__fill {
+  height: 100%;
+  background: var(--text-lo);
+  transition: width var(--t-slow) var(--ease);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.list__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--step-3);
+  padding: var(--step-2) 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+}
+
+.list__row:last-child {
+  border-bottom: none;
+}
+
+.list__secondary {
+  color: var(--text-lo);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  font-size: 11.5px;
+}
+
+/* --------------------------------------------------------------------------
+   10. Empty states & notices
+   -------------------------------------------------------------------------- */
+.empty {
+  padding: var(--step-7) var(--step-5);
+  max-width: 46ch;
+}
+
+.empty__title {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 var(--step-2);
+}
+
+.empty__body {
+  font-size: 12.5px;
+  color: var(--text-mid);
+  margin: 0;
+  line-height: 1.6;
+}
+
+.notice {
+  margin: var(--step-3) var(--step-5);
+  padding: var(--step-3) var(--step-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+  font-size: 12px;
+  color: var(--text-mid);
+}
+
+/* --------------------------------------------------------------------------
+   10b. Settings and the plugin manager
+   -------------------------------------------------------------------------- */
+.settings {
+  padding: 0 var(--step-5) var(--step-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--step-6);
+}
+
+.settings__section {
+  padding: var(--step-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+}
+
+.settings__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--step-3);
+  margin-bottom: var(--step-2);
+}
+
+.settings__title {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  margin: 0;
+}
+
+.settings__check {
+  margin-top: var(--step-3);
+  padding-top: var(--step-3);
+  border-top: 1px solid var(--line);
+}
+
+.plugin-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.plugin-row {
+  display: flex;
+  align-items: center;
+  gap: var(--step-3);
+  padding: var(--step-3) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.plugin-row:last-child {
+  border-bottom: none;
+}
+
+.plugin-row__body {
+  min-width: 0;
+  flex: 1;
+}
+
+.plugin-row__name {
+  display: flex;
+  align-items: baseline;
+  gap: var(--step-2);
+  font-size: 12.5px;
+  color: var(--text-hi);
+}
+
+.plugin-row__version {
+  font-size: 11px;
+  color: var(--text-lo);
+  font-variant-numeric: tabular-nums;
+}
+
+.plugin-row__detail {
+  margin-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-mid);
+}
+
+.plugin-row__reload {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius);
+  display: grid;
+  place-items: center;
+  color: var(--text-lo);
+  flex-shrink: 0;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+}
+
+.plugin-row__reload:hover {
+  background: var(--surface-2);
+  color: var(--text-hi);
+}
+
+.plugin-row__reload:active {
+  transform: scale(0.92);
+}
+
+.add-form {
+  display: flex;
+  gap: var(--step-2);
+  padding: var(--step-3);
+  border-top: 1px solid var(--line);
+}
+
+.add-form input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 var(--step-3);
+  border-radius: var(--radius);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-1);
+  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+
+.add-form input[type="text"]::placeholder {
+  color: var(--text-lo);
+}
+
+.add-form input[type="text"]:focus {
+  outline: none;
+  border-color: var(--text-lo);
+  background: var(--surface-2);
+}
+
+.add-form button {
+  height: 34px;
+  padding: 0 var(--step-4);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  color: var(--text-hi);
+  font-size: 12.5px;
+  font-weight: 500;
+  transition: background var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+}
+
+.add-form button:hover {
+  background: var(--surface-3);
+}
+
+.add-form button:active {
+  transform: scale(0.97);
+}
+
+.add-form button[disabled] {
+  opacity: 0.5;
+}
+
+/* --------------------------------------------------------------------------
+   11. Motion — reveal, and the signature bloom
+   -------------------------------------------------------------------------- */
+.pane__scroll > *,
+.pane__header {
+  animation: enter var(--t-mid) var(--ease-out) both;
+}
+
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The Dynamic Island-style bloom, played when the window returns from the
+   tray: a soft pill of light expands across the top and dissolves, while the
+   content itself settles out of a blur. */
+.bloom {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 50;
+  opacity: 0;
+  visibility: hidden;
+}
+
+.bloom::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 10px;
+  width: min(88%, 1040px);
+  height: 74px;
+  border-radius: var(--radius-pill);
+  transform: translateX(-50%) scaleX(0.05) scaleY(0.32);
+  transform-origin: center top;
+  background: radial-gradient(
+    60% 100% at 50% 0%,
+    rgba(var(--bloom-tint), 0.22) 0%,
+    rgba(var(--bloom-tint), 0.08) 45%,
+    rgba(var(--bloom-tint), 0) 100%
+  );
+  filter: blur(22px);
+}
+
+.app.is-revealing .bloom {
+  opacity: 1;
+  visibility: visible;
+}
+
+.app.is-revealing .bloom::before {
+  animation: island 620ms var(--ease-out) both;
+}
+
+@keyframes island {
+  0% {
+    transform: translateX(-50%) scaleX(0.05) scaleY(0.32);
+    filter: blur(24px);
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  55% {
+    transform: translateX(-50%) scaleX(1) scaleY(1);
+    filter: blur(12px);
+    opacity: 0.95;
+  }
+  100% {
+    transform: translateX(-50%) scaleX(1.03) scaleY(1.9);
+    filter: blur(34px);
+    opacity: 0;
+  }
+}
+
+.app.is-revealing .app__content {
+  animation: settle 520ms var(--ease-out) both;
+}
+
+@keyframes settle {
+  from {
+    opacity: 0.35;
+    transform: scale(0.986);
+    filter: blur(9px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: blur(0);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   12. Responsive
+   -------------------------------------------------------------------------- */
+@media (max-width: 1080px) {
+  :root {
+    --pane-library: 232px;
+    --pane-now: 280px;
+  }
+}
+
+@media (max-width: 900px) {
+  .panes {
+    grid-template-columns: var(--pane-library) minmax(0, 1fr);
+  }
+
+  .pane--now {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

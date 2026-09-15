@@ -1,0 +1,29 @@
+[package]
+name = "poddies"
+version = "0.1.0"
+edition = "2021"
+description = "Poddies — an ultra-minimal podcast client."
+authors = ["Poddies"]
+license = "MIT"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4.45", features = ["serde"] }
+poddies-core = { path = "../../crates/poddies-core" }
+poddies-plugin-api = { path = "../../crates/poddies-plugin-api" }
+poddies-plugin-host = { path = "../../crates/poddies-plugin-host" }
+
+[features]
+# Production builds embed the compiled UI. Tauri decides dev-vs-production from
+# this feature, so it must be on by default: without it a plain release build
+# still points at the dev server and the shipped exe shows a blank page.
+default = ["custom-protocol"]
+# Enable for development so the app loads from the Vite dev server instead:
+#   cargo run -p poddies --no-default-features
+custom-protocol = ["tauri/custom-protocol"]
+

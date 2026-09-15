@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/poddies-core",
+    "crates/poddies-plugin-api",
+    "crates/poddies-plugin-sdk",
+    "crates/poddies-plugin-host",
+    "crates/poddies-cli",
+    "plugins/poddies-plugin-stats",
+    "plugins/poddies-plugin-discover",
+    "app/src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+authors = ["Poddies"]
+repository = "https://github.com/poddies/poddies"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

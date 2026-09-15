@@ -1,0 +1,13 @@
+[package]
+name = "poddies-plugin-api"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+description = "The stable, versioned contract between the Poddies host and its plugins."
+
+[dependencies]
+chrono = { version = "0.4.45", features = ["serde"] }
+poddies-core = { path = "../poddies-core" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
