@@ -188,7 +188,7 @@ Ranking is performed by the host. See
 | `bad_request` | SDK | Input was not valid JSON. |
 | `bad_response` | SDK | A reply was not a valid `Reply`. |
 | `host_unavailable` | SDK | The host link is closed, or the plugin is not inside a worker. |
-| `plugin_error` | Python SDK | An unhandled exception in a handler. |
+| `plugin_error` | SDK | An unhandled handler error or panic. |
 | `bad_host_data` | either | Host data did not match the documented shape. |
 | `capability_denied` | host | The method needs a capability the manifest did not declare. |
 | `timeout` | host | The plugin did not answer within the per-call limit. |

@@ -1,0 +1,10 @@
+{
+  "id": "dev.poddies.night-listening",
+  "name": "Night Listening",
+  "version": "0.1.0",
+  "protocol": "1.0",
+  "description": "Late-night listening mode: tames dynamics, removes deep bass, brightens speech. One intensity control.",
+  "author": "Poddies",
+  "capabilities": ["ui-panel", "audio-effects", "playback-hook"],
+  "runtime": { "kind": "native", "library": "poddies_plugin_night_listening.dll" }
+}

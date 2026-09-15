@@ -59,6 +59,10 @@
       "../../plugins/poddies-plugin-eq/poddies_plugin_eq.dll": "plugins/dev.poddies.eq/poddies_plugin_eq.dll",
       "../../plugins/poddies-plugin-compressor/plugin.json": "plugins/dev.poddies.compressor/plugin.json",
       "../../plugins/poddies-plugin-compressor/poddies_plugin_compressor.dll": "plugins/dev.poddies.compressor/poddies_plugin_compressor.dll",
+      "../../plugins/poddies-plugin-listening-clock/plugin.json": "plugins/dev.poddies.listening-clock/plugin.json",
+      "../../plugins/poddies-plugin-listening-clock/poddies_plugin_listening_clock.dll": "plugins/dev.poddies.listening-clock/poddies_plugin_listening_clock.dll",
+      "../../plugins/poddies-plugin-night-listening/plugin.json": "plugins/dev.poddies.night-listening/plugin.json",
+      "../../plugins/poddies-plugin-night-listening/poddies_plugin_night_listening.dll": "plugins/dev.poddies.night-listening/poddies_plugin_night_listening.dll",
       "../../python/poddies/__init__.py": "python/poddies/__init__.py"
     },
     "windows": {

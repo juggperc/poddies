@@ -28,7 +28,9 @@ $plugins = @(
     @{ dir = "poddies-plugin-stats";           dll = "poddies_plugin_stats.dll";           id = "dev.poddies.stats" },
     @{ dir = "poddies-plugin-apple-podcasts";  dll = "poddies_plugin_apple_podcasts.dll";  id = "dev.poddies.apple-podcasts" },
     @{ dir = "poddies-plugin-eq";              dll = "poddies_plugin_eq.dll";              id = "dev.poddies.eq" },
-    @{ dir = "poddies-plugin-compressor";      dll = "poddies_plugin_compressor.dll";      id = "dev.poddies.compressor" }
+    @{ dir = "poddies-plugin-compressor";      dll = "poddies_plugin_compressor.dll";      id = "dev.poddies.compressor" },
+    @{ dir = "poddies-plugin-listening-clock"; dll = "poddies_plugin_listening_clock.dll"; id = "dev.poddies.listening-clock" },
+    @{ dir = "poddies-plugin-night-listening"; dll = "poddies_plugin_night_listening.dll"; id = "dev.poddies.night-listening" }
 )
 
 Write-Host "==> frontend" -ForegroundColor Cyan
@@ -38,7 +40,7 @@ pnpm build
 Pop-Location
 
 Write-Host "==> reference plugin DLLs" -ForegroundColor Cyan
-cargo build --release -p poddies-plugin-stats -p poddies-plugin-apple-podcasts -p poddies-plugin-eq -p poddies-plugin-compressor
+cargo build --release -p poddies-plugin-stats -p poddies-plugin-apple-podcasts -p poddies-plugin-eq -p poddies-plugin-compressor -p poddies-plugin-listening-clock -p poddies-plugin-night-listening
 if ($LASTEXITCODE -ne 0) { throw "building the plugins failed" }
 foreach ($plugin in $plugins) {
     $source = Join-Path $release $plugin.dll

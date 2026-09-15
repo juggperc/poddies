@@ -90,6 +90,35 @@ for line in sys.stdin:
 sys.exit(3)
 "#;
 
+/// A second discovery source that is deliberately slow. The host asks sources
+/// concurrently, so this bounds the whole discovery round rather than adding
+/// to it, and plugin order decides merge order.
+const SLOW_PLUGIN: &str = r#"
+import json, sys, time
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "method" not in msg:
+        continue
+    mid = msg.get("id")
+    if msg["method"] == "describe":
+        sys.stdout.write(json.dumps({"id": mid, "result": {
+            "id": "dev.test.slow", "name": "Slow", "version": "0.1.0",
+            "protocol": "1.0", "ui_panels": []}}) + "\n")
+        sys.stdout.flush()
+        continue
+    if msg["method"] == "discovery/list":
+        time.sleep(1.0)
+        sys.stdout.write(json.dumps({"id": mid, "result": {"candidates": [
+            {"title": "Slow " + str(i),
+             "feed_url": "https://slow.example/" + str(i) + ".xml",
+             "source": "dev.test.slow", "categories": ["Science"]}
+            for i in range(2)]}}) + "\n")
+        sys.stdout.flush()
+        continue
+    sys.stdout.write(json.dumps({"id": mid, "error": {"code": "unsupported_method", "message": msg["method"]}}) + "\n")
+    sys.stdout.flush()
+"#;
+
 #[derive(Default)]
 struct TestServices {
     logs: Mutex<Vec<String>>,
@@ -109,7 +138,8 @@ impl HostServices for TestServices {
 }
 
 fn python_available() -> bool {
-    let candidates: [(&str, &[&str]); 2] = [("py", &["-3", "--version"]), ("python", &["--version"])];
+    let candidates: [(&str, &[&str]); 2] =
+        [("py", &["-3", "--version"]), ("python", &["--version"])];
     candidates.iter().any(|(program, args)| {
         Command::new(program)
             .args(*args)
@@ -167,17 +197,30 @@ fn plugin_lifecycle_end_to_end() {
         }"#,
         CRASHER_PLUGIN,
     );
+    write_fixture(
+        &root,
+        "slow",
+        r#"{
+            "id": "dev.test.slow",
+            "name": "Slow",
+            "version": "0.1.0",
+            "protocol": "1.0",
+            "capabilities": ["discovery-source"],
+            "runtime": { "kind": "python", "entry": "main.py" }
+        }"#,
+        SLOW_PLUGIN,
+    );
 
     let services = Arc::new(TestServices::default());
     let launcher = WorkerLauncher::new(env!("CARGO_BIN_EXE_poddies-plugin-worker"));
     let mut host = PluginHost::new(launcher, Arc::clone(&services) as Arc<dyn HostServices>);
 
     let reports = host.load_all(&root);
-    assert_eq!(reports.len(), 2);
+    assert_eq!(reports.len(), 3);
     for report in &reports {
         assert!(report.result.is_ok(), "failed to load {:?}", report);
     }
-    assert_eq!(host.plugins().len(), 2);
+    assert_eq!(host.plugins().len(), 3);
 
     // Panels are advertised and rendered.
     let panels = host.panels();
@@ -187,10 +230,20 @@ fn plugin_lifecycle_end_to_end() {
     let content = host.panel_content(panels[0].plugin_index, "main").unwrap();
     assert!(content.widgets.len() >= 2);
 
-    // Discovery source contributes candidates.
-    let candidates = host.discovery_candidates(3, &["Technology".to_string()], Duration::from_secs(5));
-    assert_eq!(candidates.len(), 3);
+    // Discovery source contributes candidates. Two sources are asked
+    // concurrently and merge in plugin order (hello < slow alphabetically).
+    let started = std::time::Instant::now();
+    let candidates =
+        host.discovery_candidates(3, &["Technology".to_string()], Duration::from_secs(5));
+    // The slow source sleeps 1s; a sequential host would spend 2s+ here.
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "discovery round took too long: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(candidates.len(), 5);
     assert_eq!(candidates[0].title, "Show 0");
+    assert_eq!(candidates[3].title, "Slow 0");
 
     // Plugin -> host request for library data round-trips.
     let hello = host
@@ -207,12 +260,14 @@ fn plugin_lifecycle_end_to_end() {
     assert_eq!(count, json!(1));
 
     // Host log call landed in our services.
-    assert!(services
-        .logs
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|line| line.contains("hello from plugin")));
+    assert!(
+        services
+            .logs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.contains("hello from plugin"))
+    );
 
     // Playback events reach the plugin as notifications.
     host.broadcast(
@@ -246,7 +301,10 @@ fn plugin_lifecycle_end_to_end() {
         .request("ui/panel", json!({ "panel_id": "main" }))
         .unwrap_err();
     assert!(
-        matches!(error.code.as_str(), "plugin_exited" | "write_failed" | "timeout"),
+        matches!(
+            error.code.as_str(),
+            "plugin_exited" | "write_failed" | "timeout"
+        ),
         "unexpected error code: {}",
         error.code
     );

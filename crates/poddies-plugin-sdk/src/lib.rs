@@ -36,10 +36,10 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 
 use serde_json::Value;
 
-use poddies_plugin_api::protocol::{methods, Envelope, Reply};
+use poddies_plugin_api::protocol::{Envelope, Reply, methods};
 
 pub use poddies_plugin_api as api;
-pub use poddies_plugin_api::abi::{HostApi, PluginVTable, ABI_VERSION};
+pub use poddies_plugin_api::abi::{ABI_VERSION, HostApi, PluginVTable};
 pub use poddies_plugin_api::protocol::PROTOCOL_VERSION;
 pub use poddies_plugin_api::ui::{ListItem, PanelContent, UiPanelDescriptor, Widget};
 pub use poddies_plugin_api::{Capability, PluginError, PluginInfo};
@@ -91,10 +91,7 @@ pub fn host_notify(method: &str, params: Value) -> Result<(), PluginError> {
 
 /// Write a line to the host's plugin log.
 pub fn log(level: &str, message: &str) {
-    let _ = host_notify(
-        "host/log",
-        json!({ "level": level, "message": message }),
-    );
+    let _ = host_notify("host/log", json!({ "level": level, "message": message }));
 }
 
 fn send_to_host(envelope: Envelope, expects_reply: bool) -> Result<Value, PluginError> {
@@ -107,8 +104,8 @@ fn send_to_host(envelope: Envelope, expects_reply: bool) -> Result<Value, Plugin
 
     let line = serde_json::to_string(&envelope)
         .map_err(|err| PluginError::new("serialize_failed", err.to_string()))?;
-    let request = CString::new(line)
-        .map_err(|err| PluginError::new("bad_request", err.to_string()))?;
+    let request =
+        CString::new(line).map_err(|err| PluginError::new("bad_request", err.to_string()))?;
 
     let reply_ptr = (api.call)(request.as_ptr());
     if reply_ptr.is_null() {
@@ -124,7 +121,9 @@ fn send_to_host(envelope: Envelope, expects_reply: bool) -> Result<Value, Plugin
     }
 
     // SAFETY: the worker returned a valid NUL-terminated string we now own.
-    let text = unsafe { CStr::from_ptr(reply_ptr) }.to_string_lossy().into_owned();
+    let text = unsafe { CStr::from_ptr(reply_ptr) }
+        .to_string_lossy()
+        .into_owned();
     (api.free_string)(reply_ptr);
 
     let reply: Reply = serde_json::from_str(&text)
@@ -133,6 +132,18 @@ fn send_to_host(envelope: Envelope, expects_reply: bool) -> Result<Value, Plugin
         Some(error) => Err(error),
         None => Ok(reply.result.unwrap_or(Value::Null)),
     }
+}
+
+/// Extract the request id from a wire line, used when reporting a handler
+/// panic so the host can match the error reply to its pending call.
+///
+/// `#[doc(hidden)]` because the `export_plugin!` macro (which expands in
+/// downstream crates) needs it via `$crate::`; it is not authoring surface.
+#[doc(hidden)]
+pub fn plugin_call_id(line: &str) -> Option<u64> {
+    serde_json::from_str::<Value>(line)
+        .ok()
+        .and_then(|value| value.get("id").and_then(Value::as_u64))
 }
 
 /// Handle one wire line, returning the line to write back (or `None` when the
@@ -202,8 +213,7 @@ pub fn run<P: Plugin>(mut plugin: P) -> std::io::Result<()> {
 #[macro_export]
 macro_rules! export_plugin {
     ($plugin:ty) => {
-        static PODDIES_PLUGIN: ::std::sync::Mutex<Option<$plugin>> =
-            ::std::sync::Mutex::new(None);
+        static PODDIES_PLUGIN: ::std::sync::Mutex<Option<$plugin>> = ::std::sync::Mutex::new(None);
 
         extern "C" fn poddies_handle_line(
             request: *const ::std::os::raw::c_char,
@@ -218,13 +228,31 @@ macro_rules! export_plugin {
                 Err(_) => return ::std::ptr::null_mut(),
             };
 
-            let mut guard = match PODDIES_PLUGIN.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            let plugin = guard.get_or_insert_with(<$plugin>::default);
+            // A panic escaping `extern "C"` would abort the worker process.
+            // Catch it here and report it as a protocol error instead, so one
+            // buggy handler costs one failed call, not the whole plugin.
+            let caught = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
+                let mut guard = match PODDIES_PLUGIN.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                let plugin = guard.get_or_insert_with(<$plugin>::default);
+                $crate::dispatch(plugin, &line)
+            }));
 
-            let Some(response) = $crate::dispatch(plugin, &line) else {
+            let response = match caught {
+                ::std::result::Result::Ok(response) => response,
+                ::std::result::Result::Err(_) => {
+                    let reply = $crate::api::protocol::Reply::failed(
+                        $crate::plugin_call_id(&line),
+                        "plugin_error",
+                        "plugin handler panicked",
+                    );
+                    ::serde_json::to_string(&reply).ok()
+                }
+            };
+
+            let Some(response) = response else {
                 return ::std::ptr::null_mut();
             };
             match ::std::ffi::CString::new(response) {
@@ -323,8 +351,7 @@ mod tests {
 
     #[test]
     fn echo_round_trips_params() {
-        let response =
-            dispatch(&mut Echo, r#"{"id":3,"method":"echo","params":{"a":1}}"#).unwrap();
+        let response = dispatch(&mut Echo, r#"{"id":3,"method":"echo","params":{"a":1}}"#).unwrap();
         let reply: Reply = serde_json::from_str(&response).unwrap();
         assert_eq!(reply.result.unwrap(), json!({"a": 1}));
     }

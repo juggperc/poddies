@@ -12,14 +12,14 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
 use poddies_plugin_api::manifest::{Capability, PluginManifest};
 use poddies_plugin_api::protocol::{
-    methods, AudioGraph, AudioUnit, DiscoveryRequest, DiscoveryResponse, Envelope, LogRequest,
-    PanelRequest, PluginError, Reply, WidgetChange,
+    AudioGraph, AudioUnit, DiscoveryRequest, DiscoveryResponse, Envelope, LogRequest, PanelRequest,
+    PluginError, Reply, WidgetChange, methods,
 };
 use poddies_plugin_api::ui::{PanelContent, UiPanelDescriptor};
 use poddies_plugin_api::{DiscoveryCandidate, PluginInfo};
@@ -36,8 +36,52 @@ pub const DEFAULT_MEMORY_LIMIT: usize = 256 * 1024 * 1024;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long `kill()` waits for a worker to exit on its own (after stdin EOF)
+/// before whoever drops the `LoadedPlugin` lets the job object do it.
+const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
+
+/// Longest line read from a worker before it is treated as broken output. A
+/// sane protocol line is a few KiB; this only exists so a plugin that floods
+/// stdout cannot balloon the host's memory.
+const MAX_LINE_BYTES: usize = 1024 * 1024;
+
+/// Read one newline-terminated line from `reader`, bounded per line rather
+/// than per stream. Returns `Ok(false)` at end of stream. A line longer than
+/// `cap` is discarded up to its terminating newline and returned as empty —
+/// the plugin is flooding, and losing one junk line beats unbounded memory.
+fn read_line_capped(
+    reader: &mut impl BufRead,
+    out: &mut String,
+    cap: usize,
+) -> std::io::Result<bool> {
+    use std::io::Read;
+
+    loop {
+        let mut bytes = Vec::new();
+        let read = reader
+            .by_ref()
+            .take(cap as u64)
+            .read_until(b'\n', &mut bytes)?;
+        if read == 0 {
+            if bytes.is_empty() {
+                return Ok(false);
+            }
+            // End of stream with a final unterminated line.
+            out.push_str(&String::from_utf8_lossy(&bytes));
+            return Ok(true);
+        }
+        if bytes.ends_with(b"\n") {
+            out.push_str(&String::from_utf8_lossy(&bytes));
+            return Ok(true);
+        }
+        // Overlong: keep discarding until this line's newline goes past.
+    }
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// How to start a worker. Release builds point this at the app's own binary;
@@ -99,16 +143,88 @@ pub struct NoHostServices;
 
 impl HostServices for NoHostServices {}
 
+/// The call path into a running worker, shareable across threads. Everything in
+/// it is either `Arc`-cloned state or state whose accessor already tolerates a
+/// closed pipe, so a request sent from a helper thread stays valid even if the
+/// `LoadedPlugin` is dropped mid-call — it simply fails with `write_failed` or
+/// `plugin_exited` like any other dead-plugin call.
+#[derive(Clone)]
+struct RequestCore {
+    id: String,
+    alive: Arc<AtomicBool>,
+    stdin: Arc<Mutex<Option<ChildStdin>>>,
+    pending: Arc<Mutex<HashMap<u64, Sender<Reply>>>>,
+    next_id: Arc<AtomicU64>,
+}
+
+impl RequestCore {
+    fn request_with_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, PluginError> {
+        if !self.alive.load(Ordering::SeqCst) {
+            return Err(PluginError::new(
+                "plugin_exited",
+                format!("plugin '{}' is not running", self.id),
+            ));
+        }
+
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let (sender, receiver) = mpsc::channel();
+        lock(&self.pending).insert(id, sender);
+
+        let envelope = Envelope::request(id, method, params);
+        let line = match serde_json::to_string(&envelope) {
+            Ok(line) => line,
+            Err(err) => {
+                lock(&self.pending).remove(&id);
+                return Err(PluginError::new("serialize_failed", err.to_string()));
+            }
+        };
+
+        if let Err(err) = write_core_line(&self.stdin, &line) {
+            lock(&self.pending).remove(&id);
+            return Err(PluginError::new("write_failed", err.to_string()));
+        }
+
+        match receiver.recv_timeout(timeout) {
+            Ok(reply) => match reply.error {
+                Some(error) => Err(error),
+                None => Ok(reply.result.unwrap_or(Value::Null)),
+            },
+            Err(_) => {
+                lock(&self.pending).remove(&id);
+                Err(PluginError::new(
+                    "timeout",
+                    format!("'{method}' did not answer within {timeout:?}"),
+                ))
+            }
+        }
+    }
+}
+
+fn write_core_line(stdin: &Mutex<Option<ChildStdin>>, line: &str) -> std::io::Result<()> {
+    let mut guard = lock(stdin);
+    match guard.as_mut() {
+        Some(stdin) => writeln!(stdin, "{line}").and_then(|_| stdin.flush()),
+        None => Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "worker stdin closed",
+        )),
+    }
+}
+
 /// A running plugin process.
 pub struct LoadedPlugin {
     pub manifest: PluginManifest,
     /// The description the plugin reported at runtime.
     pub info: PluginInfo,
     pub directory: PathBuf,
-    alive: Arc<AtomicBool>,
-    stdin: Arc<Mutex<Option<ChildStdin>>>,
-    pending: Arc<Mutex<HashMap<u64, Sender<Reply>>>>,
-    next_id: AtomicU64,
+    /// The shareable call path — plain `Arc` handles into the process plumbing,
+    /// cloneable so helper threads can issue requests without borrowing `self`.
+    core: RequestCore,
     child: Mutex<Child>,
     reader: Mutex<Option<JoinHandle<()>>>,
     /// Held purely for RAII: dropping it kills the worker via the job object.
@@ -118,7 +234,7 @@ pub struct LoadedPlugin {
 
 impl LoadedPlugin {
     pub fn is_alive(&self) -> bool {
-        self.alive.load(Ordering::SeqCst)
+        self.core.alive.load(Ordering::SeqCst)
     }
 
     pub fn has(&self, capability: Capability) -> bool {
@@ -140,39 +256,7 @@ impl LoadedPlugin {
         params: Value,
         timeout: Duration,
     ) -> Result<Value, PluginError> {
-        if !self.is_alive() {
-            return Err(PluginError::new(
-                "plugin_exited",
-                format!("plugin '{}' is not running", self.manifest.id),
-            ));
-        }
-
-        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        let (sender, receiver) = mpsc::channel();
-        lock(&self.pending).insert(id, sender);
-
-        let envelope = Envelope::request(id, method, params);
-        let line = serde_json::to_string(&envelope)
-            .map_err(|err| PluginError::new("serialize_failed", err.to_string()))?;
-
-        if let Err(err) = self.write_line(&line) {
-            lock(&self.pending).remove(&id);
-            return Err(PluginError::new("write_failed", err.to_string()));
-        }
-
-        match receiver.recv_timeout(timeout) {
-            Ok(reply) => match reply.error {
-                Some(error) => Err(error),
-                None => Ok(reply.result.unwrap_or(Value::Null)),
-            },
-            Err(_) => {
-                lock(&self.pending).remove(&id);
-                Err(PluginError::new(
-                    "timeout",
-                    format!("'{method}' did not answer within {timeout:?}"),
-                ))
-            }
-        }
+        self.core.request_with_timeout(method, params, timeout)
     }
 
     /// Fire-and-forget. Never waits for a reply.
@@ -180,30 +264,31 @@ impl LoadedPlugin {
         let envelope = Envelope::notification(method, params);
         let line = serde_json::to_string(&envelope)
             .map_err(|err| PluginError::new("serialize_failed", err.to_string()))?;
-        self.write_line(&line)
+        write_core_line(&self.core.stdin, &line)
             .map_err(|err| PluginError::new("write_failed", err.to_string()))
     }
 
-    fn write_line(&self, line: &str) -> std::io::Result<()> {
-        let mut guard = lock(&self.stdin);
-        match guard.as_mut() {
-            Some(stdin) => writeln!(stdin, "{line}").and_then(|_| stdin.flush()),
-            None => Err(std::io::Error::new(
-                std::io::ErrorKind::BrokenPipe,
-                "worker stdin closed",
-            )),
-        }
-    }
-
-    /// Stop the plugin. Dropping the `Sandbox` also kills it via the job object,
-    /// so this is belt and braces.
+    /// Stop the plugin: close stdin so the worker's own read loop sees EOF and
+    /// tears itself down, then give it a short grace period before the caller
+    /// drops us and the job object kills the process. A wedged worker never
+    /// reads its pipe again, so no `shutdown` request is written — it could
+    /// block the host forever on a full pipe.
     pub fn kill(&self) {
-        self.alive.store(false, Ordering::SeqCst);
-        let _ = self.notify(methods::SHUTDOWN, Value::Null);
-        drop(lock(&self.stdin).take());
-        if let Ok(mut child) = self.child.lock() {
-            let _ = child.kill();
-            let _ = child.wait();
+        self.core.alive.store(false, Ordering::SeqCst);
+        drop(lock(&self.core.stdin).take());
+        let deadline = Instant::now() + SHUTDOWN_GRACE;
+        while let Ok(mut child) = self.child.try_lock() {
+            match child.try_wait() {
+                Ok(Some(_)) | Err(_) => return,
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        return;
+                    }
+                    // Releasing the lock matters: a recovering path may want it.
+                    drop(child);
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
         }
     }
 }
@@ -385,7 +470,10 @@ impl PluginHost {
             let tail = Arc::clone(&stderr_tail);
             let id = manifest.id.clone();
             std::thread::spawn(move || {
-                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                let mut reader = BufReader::new(stderr);
+                let mut line = String::new();
+                while read_line_capped(&mut reader, &mut line, MAX_LINE_BYTES).unwrap_or(false) {
+                    let line = std::mem::take(&mut line);
                     eprintln!("[plugin {id}] {line}");
                     let mut tail = lock(&tail);
                     tail.push(line);
@@ -399,12 +487,14 @@ impl PluginHost {
         let stdin = Arc::new(Mutex::new(Some(child.stdin.take().ok_or_else(|| {
             PluginError::new("spawn_failed", "worker stdin unavailable")
         })?)));
-        let stdout = child.stdout.take().ok_or_else(|| {
-            PluginError::new("spawn_failed", "worker stdout unavailable")
-        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| PluginError::new("spawn_failed", "worker stdout unavailable"))?;
 
         let pending: Arc<Mutex<HashMap<u64, Sender<Reply>>>> = Arc::new(Mutex::new(HashMap::new()));
         let alive = Arc::new(AtomicBool::new(true));
+        let next_id = Arc::new(AtomicU64::new(1));
         let services = Arc::clone(&self.services);
 
         let reader_handle = {
@@ -412,7 +502,10 @@ impl PluginHost {
             let pending = Arc::clone(&pending);
             let alive = Arc::clone(&alive);
             std::thread::spawn(move || {
-                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                let mut reader = BufReader::new(stdout);
+                let mut line = String::new();
+                while read_line_capped(&mut reader, &mut line, MAX_LINE_BYTES).unwrap_or(false) {
+                    let line = std::mem::take(&mut line);
                     if line.trim().is_empty() {
                         continue;
                     }
@@ -461,36 +554,38 @@ impl PluginHost {
             ui_panels: Vec::new(),
         };
 
+        let core = RequestCore {
+            id: manifest.id.clone(),
+            alive: Arc::clone(&alive),
+            stdin: Arc::clone(&stdin),
+            pending: Arc::clone(&pending),
+            next_id: Arc::clone(&next_id),
+        };
+
         let plugin = LoadedPlugin {
             manifest,
             info: placeholder,
             directory,
-            alive,
-            stdin,
-            pending,
-            next_id: AtomicU64::new(1),
+            core,
             child: Mutex::new(child),
             reader: Mutex::new(Some(reader_handle)),
             _sandbox: sandbox,
             stderr_tail,
         };
 
-        let info: PluginInfo = match plugin.request_with_timeout(
-            methods::DESCRIBE,
-            Value::Null,
-            HANDSHAKE_TIMEOUT,
-        ) {
-            Ok(value) => serde_json::from_value(value).map_err(|err| {
-                PluginError::new("handshake_failed", format!("bad describe payload: {err}"))
-            })?,
-            Err(error) => {
-                plugin.kill();
-                return Err(PluginError::new(
-                    "handshake_failed",
-                    format!("plugin did not answer describe: {}", error.message),
-                ));
-            }
-        };
+        let info: PluginInfo =
+            match plugin.request_with_timeout(methods::DESCRIBE, Value::Null, HANDSHAKE_TIMEOUT) {
+                Ok(value) => serde_json::from_value(value).map_err(|err| {
+                    PluginError::new("handshake_failed", format!("bad describe payload: {err}"))
+                })?,
+                Err(error) => {
+                    plugin.kill();
+                    return Err(PluginError::new(
+                        "handshake_failed",
+                        format!("plugin did not answer describe: {}", error.message),
+                    ));
+                }
+            };
 
         if info.id != plugin.manifest.id {
             plugin.kill();
@@ -557,36 +652,65 @@ impl PluginHost {
     ///
     /// `topics` is a hint derived from the listener's profile; `timeout` should
     /// be generous enough for a source that does network I/O.
+    ///
+    /// Sources are asked concurrently: the slowest source sets the wait, not
+    /// the sum of all of them. Results stay in plugin order regardless.
     pub fn discovery_candidates(
         &self,
         limit: usize,
         topics: &[String],
         timeout: Duration,
     ) -> Vec<DiscoveryCandidate> {
+        let sources: Vec<(String, RequestCore, Value)> = self
+            .plugins
+            .iter()
+            .filter(|plugin| plugin.has(Capability::DiscoverySource) && plugin.is_alive())
+            .filter_map(|plugin| {
+                let params = serde_json::to_value(DiscoveryRequest {
+                    limit,
+                    topics: topics.to_vec(),
+                })
+                .ok()?;
+                Some((plugin.manifest.id.clone(), plugin.core.clone(), params))
+            })
+            .collect();
+
+        // One thread per source; the slowest source sets the wait instead of
+        // the sum of all of them. Cores outlive the loop by clone, so a plugin
+        // unloaded mid-flight just fails its call like any dead plugin would.
+        let replies: Vec<_> = sources
+            .into_iter()
+            .map(|(id, core, params)| {
+                let (sender, receiver) = mpsc::channel();
+                std::thread::spawn(move || {
+                    let _ = sender.send(core.request_with_timeout(
+                        methods::DISCOVERY_LIST,
+                        params,
+                        timeout,
+                    ));
+                });
+                (id, receiver)
+            })
+            .collect();
+
         let mut candidates = Vec::new();
-        for plugin in &self.plugins {
-            if !plugin.has(Capability::DiscoverySource) || !plugin.is_alive() {
-                continue;
-            }
-            let params = match serde_json::to_value(DiscoveryRequest {
-                limit,
-                topics: topics.to_vec(),
-            }) {
-                Ok(params) => params,
-                Err(_) => continue,
-            };
-            match plugin.request_with_timeout(methods::DISCOVERY_LIST, params, timeout) {
-                Ok(value) => match serde_json::from_value::<DiscoveryResponse>(value) {
+        for (id, receiver) in replies {
+            match receiver.recv_timeout(timeout + Duration::from_secs(1)) {
+                Ok(Ok(value)) => match serde_json::from_value::<DiscoveryResponse>(value) {
                     Ok(response) => candidates.extend(response.candidates),
                     Err(err) => eprintln!(
-                        "[poddies] plugin '{}' returned malformed discovery data: {err}",
-                        plugin.manifest.id
+                        "[poddies] plugin '{id}' returned malformed discovery data: {err}"
                     ),
                 },
-                Err(error) => eprintln!(
-                    "[poddies] plugin '{}' discovery failed: {}",
-                    plugin.manifest.id, error.message
-                ),
+                Ok(Err(error)) => {
+                    eprintln!(
+                        "[poddies] plugin '{id}' discovery failed: {}",
+                        error.message
+                    )
+                }
+                Err(_) => {
+                    eprintln!("[poddies] plugin '{id}' discovery thread did not finish")
+                }
             }
         }
         candidates
@@ -638,7 +762,9 @@ impl PluginHost {
             }
             match plugin.request(methods::AUDIO_GRAPH, Value::Null) {
                 Ok(value) => match serde_json::from_value::<AudioGraph>(value) {
-                    Ok(graph) => units.extend(graph.units.into_iter().map(|unit| qualify(plugin, unit))),
+                    Ok(graph) => {
+                        units.extend(graph.units.into_iter().map(|unit| qualify(plugin, unit)))
+                    }
                     Err(error) => eprintln!(
                         "[poddies] plugin '{}' returned a malformed audio graph: {error}",
                         plugin.manifest.id
@@ -710,16 +836,16 @@ fn qualify(plugin: &LoadedPlugin, mut unit: AudioUnit) -> AudioUnit {
     unit
 }
 
-fn handle_host_request(services: &dyn HostServices, envelope: &Envelope) -> Reply {    match envelope.method.as_str() {
+fn handle_host_request(services: &dyn HostServices, envelope: &Envelope) -> Reply {
+    match envelope.method.as_str() {
         methods::HOST_LIBRARY_SHOWS => Reply::ok(envelope.id, services.library_shows()),
         methods::HOST_LIBRARY_HISTORY => Reply::ok(envelope.id, services.library_history()),
         methods::HOST_LOG => {
-            let request: LogRequest = serde_json::from_value(envelope.params.clone()).unwrap_or(
-                LogRequest {
+            let request: LogRequest =
+                serde_json::from_value(envelope.params.clone()).unwrap_or(LogRequest {
                     level: "info".to_string(),
                     message: String::new(),
-                },
-            );
+                });
             services.log(&request.level, &request.message);
             Reply::ok(envelope.id, Value::Null)
         }

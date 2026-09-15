@@ -160,7 +160,7 @@ sample, so latency is unchanged, and a plugin written in Python is exactly as
 viable as one in Rust. The `meter` widget is filled by the host straight from
 the live graph, so a gain-reduction meter is real rather than reported.
 
-Two reference plugins ship in [`plugins/`](plugins) and cover the whole
+Four reference plugins ship in [`plugins/`](plugins) and cover the whole
 lifecycle, each built as a real `.dll`:
 
 | Plugin | Capability | Demonstrates |
@@ -169,6 +169,8 @@ lifecycle, each built as a real `.dll`:
 | **Apple Podcasts** | `discovery-source` | feeding the Discovery queue from the public Apple Podcasts API (no key), caching, offline fallback |
 | **Parametric EQ** | `ui-panel`, `audio-effects` | a five-band curve in a popout, where the drawn response comes from the same coefficients as the audio |
 | **Compressor** | `ui-panel`, `audio-effects` | one vintage knob that moves four compressor parameters, docked under the speed control, with a live gain-reduction meter |
+| **Listening Clock** | `ui-panel`, `library-read` | habits rather than counts: day streaks, hour-of-day rhythm and weekday balance from timestamps alone |
+| **Night Listening** | `ui-panel`, `audio-effects` | composing both audio units — compressor plus EQ — into one late-night chain driven by a single intensity slider |
 
 Settings lists every plugin with its state, a Reload button and an on/off
 switch: disabling stops it at once, takes its panel out of the interface and

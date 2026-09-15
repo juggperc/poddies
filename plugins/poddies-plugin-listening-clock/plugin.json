@@ -1,0 +1,10 @@
+{
+  "id": "dev.poddies.listening-clock",
+  "name": "Listening Clock",
+  "version": "0.1.0",
+  "protocol": "1.0",
+  "description": "When you listen: day streaks, hour rhythms and weekday balance from your own history.",
+  "author": "Poddies",
+  "capabilities": ["ui-panel", "library-read"],
+  "runtime": { "kind": "native", "library": "poddies_plugin_listening_clock.dll" }
+}

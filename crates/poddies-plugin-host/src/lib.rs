@@ -11,7 +11,7 @@ pub mod sandbox;
 pub mod worker;
 
 pub use manager::{
-    HostServices, LoadReport, LoadedPlugin, NoHostServices, PanelEntry, PluginHost, WorkerLauncher,
-    DEFAULT_MEMORY_LIMIT, DEFAULT_REQUEST_TIMEOUT,
+    DEFAULT_MEMORY_LIMIT, DEFAULT_REQUEST_TIMEOUT, HostServices, LoadReport, LoadedPlugin,
+    NoHostServices, PanelEntry, PluginHost, WorkerLauncher,
 };
 pub use worker::run_worker;

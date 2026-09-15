@@ -2634,6 +2634,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "poddies-plugin-listening-clock"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "poddies-plugin-sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "poddies-plugin-night-listening"
+version = "0.1.0"
+dependencies = [
+ "poddies-plugin-sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "poddies-plugin-sdk"
 version = "0.1.0"
 dependencies = [

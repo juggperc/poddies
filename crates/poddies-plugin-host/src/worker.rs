@@ -15,7 +15,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use libloading::{Library, Symbol};
 use serde_json::Value;
 
-use poddies_plugin_api::abi::{HostApi, PluginVTable, ABI_VERSION, ENTRY_SYMBOL};
+use poddies_plugin_api::abi::{ABI_VERSION, ENTRY_SYMBOL, HostApi, PluginVTable};
 use poddies_plugin_api::manifest::{PluginManifest, Runtime};
 use poddies_plugin_api::protocol::{Envelope, Reply};
 
@@ -48,7 +48,9 @@ pub fn load_manifest(plugin_dir: &Path) -> Result<PluginManifest, String> {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// The worker's stdio, shared between the main loop and a plugin's outbound
@@ -83,7 +85,9 @@ extern "C" fn host_call(request: *const std::ffi::c_char) -> *mut std::ffi::c_ch
     }
 
     // SAFETY: the plugin passes a NUL-terminated string valid for this call.
-    let text = unsafe { CStr::from_ptr(request) }.to_string_lossy().into_owned();
+    let text = unsafe { CStr::from_ptr(request) }
+        .to_string_lossy()
+        .into_owned();
     let Ok(mut envelope) = serde_json::from_str::<Envelope>(&text) else {
         return std::ptr::null_mut();
     };
@@ -217,10 +221,20 @@ fn run_native(library_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Longest line relayed to or from a Python plugin before the connection is
+/// treated as broken output. Only a runaway writer trips this; a sane protocol
+/// line is a few KiB.
+const MAX_RELAY_LINE_BYTES: u64 = 1024 * 1024;
+
 /// Relay stdio to a Python plugin. The interpreter is a plain child; the worker
 /// is a transparent pipe, so the protocol is identical to a native plugin and
 /// the Python side can perform host calls directly.
 fn run_python(entry: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    let path_sep = ";";
+    #[cfg(not(windows))]
+    let path_sep = ":";
+
     let (program, prefix_args) =
         find_python().ok_or_else(|| "no Python interpreter found on PATH".to_string())?;
 
@@ -234,7 +248,20 @@ fn run_python(entry: &Path) -> Result<(), String> {
         .stderr(Stdio::inherit());
 
     if let Some(sdk) = locate_python_sdk() {
-        command.env("PYTHONPATH", sdk);
+        // Append rather than overwrite: the launcher may already have set a
+        // PYTHONPATH (e.g. `poddies dev` pointing at a checkout SDK), and a
+        // plugin that ships its own import path alongside ours should keep it.
+        match std::env::var("PYTHONPATH") {
+            Ok(existing) if !existing.is_empty() => {
+                command.env(
+                    "PYTHONPATH",
+                    format!("{}{path_sep}{existing}", sdk.display()),
+                );
+            }
+            _ => {
+                command.env("PYTHONPATH", sdk);
+            }
+        }
     }
 
     let mut child = command
@@ -245,14 +272,28 @@ fn run_python(entry: &Path) -> Result<(), String> {
     let child_stdout = child.stdout.take().ok_or("python stdout unavailable")?;
 
     let relay = std::thread::spawn(move || {
+        use std::io::Read;
+
         let mut reader = BufReader::new(child_stdout);
         let stdout = std::io::stdout();
         let mut out = stdout.lock();
-        let mut line = String::new();
-        while reader.read_line(&mut line).unwrap_or(0) > 0 {
-            let _ = out.write_all(line.as_bytes());
+        loop {
+            let mut bytes = Vec::new();
+            let read = reader
+                .by_ref()
+                .take(MAX_RELAY_LINE_BYTES)
+                .read_until(b'\n', &mut bytes)
+                .unwrap_or(0);
+            if read == 0 {
+                if bytes.is_empty() {
+                    break;
+                }
+                out.write_all(&bytes).ok();
+                break;
+            }
+            let _ = out.write_all(&bytes);
             let _ = out.flush();
-            line.clear();
+            bytes.clear();
         }
     });
 

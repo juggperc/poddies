@@ -10,6 +10,8 @@ members = [
     "plugins/poddies-plugin-apple-podcasts",
     "plugins/poddies-plugin-eq",
     "plugins/poddies-plugin-compressor",
+    "plugins/poddies-plugin-listening-clock",
+    "plugins/poddies-plugin-night-listening",
     "app/src-tauri",
 ]
 
