@@ -85,6 +85,8 @@ pub enum Capability {
     DiscoverySource,
     /// Receives playback lifecycle events.
     PlaybackHook,
+    /// May place units in the playback audio chain.
+    AudioEffects,
     /// May query the library.
     LibraryRead,
     /// May write to the library. Not granted to reference plugins.

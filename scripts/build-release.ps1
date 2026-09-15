@@ -26,7 +26,9 @@ $release = Join-Path $root "target\release"
 
 $plugins = @(
     @{ dir = "poddies-plugin-stats";           dll = "poddies_plugin_stats.dll";           id = "dev.poddies.stats" },
-    @{ dir = "poddies-plugin-apple-podcasts";  dll = "poddies_plugin_apple_podcasts.dll";  id = "dev.poddies.apple-podcasts" }
+    @{ dir = "poddies-plugin-apple-podcasts";  dll = "poddies_plugin_apple_podcasts.dll";  id = "dev.poddies.apple-podcasts" },
+    @{ dir = "poddies-plugin-eq";              dll = "poddies_plugin_eq.dll";              id = "dev.poddies.eq" },
+    @{ dir = "poddies-plugin-compressor";      dll = "poddies_plugin_compressor.dll";      id = "dev.poddies.compressor" }
 )
 
 Write-Host "==> frontend" -ForegroundColor Cyan
@@ -36,7 +38,7 @@ pnpm build
 Pop-Location
 
 Write-Host "==> reference plugin DLLs" -ForegroundColor Cyan
-cargo build --release -p poddies-plugin-stats -p poddies-plugin-apple-podcasts
+cargo build --release -p poddies-plugin-stats -p poddies-plugin-apple-podcasts -p poddies-plugin-eq -p poddies-plugin-compressor
 if ($LASTEXITCODE -ne 0) { throw "building the plugins failed" }
 foreach ($plugin in $plugins) {
     $source = Join-Path $release $plugin.dll

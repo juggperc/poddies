@@ -1222,6 +1222,297 @@ input {
 }
 
 /* --------------------------------------------------------------------------
+   9b. Interactive plugin controls
+   Knobs, sliders, EQ curves and meters. Monochrome like everything else: depth
+   comes from tone and hairline, not from colour.
+   -------------------------------------------------------------------------- */
+.knob-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: var(--step-2) 0;
+}
+
+.knob {
+  display: block;
+  touch-action: none;
+  cursor: ns-resize;
+}
+
+.knob:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+  border-radius: var(--radius-pill);
+}
+
+.knob__track {
+  stroke: var(--line-strong);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+.knob__fill {
+  stroke: var(--text-lo);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  transition: stroke var(--t-fast) var(--ease);
+}
+
+.knob:hover .knob__fill,
+.knob.is-dragging .knob__fill {
+  stroke: var(--text-hi);
+}
+
+.knob__face {
+  fill: var(--surface-2);
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.knob--vintage .knob__face {
+  fill: var(--surface-3);
+  stroke: var(--line-strong);
+}
+
+/* The knurled rim: a dashed ring that reads as a milled edge. */
+.knob__knurl {
+  stroke: var(--line-strong);
+  stroke-width: 5;
+  stroke-dasharray: 1.6 3;
+  opacity: 0.9;
+}
+
+.knob__tick {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.knob__tick--major {
+  stroke: var(--text-lo);
+  stroke-width: 1.4;
+}
+
+.knob__pointer {
+  stroke: var(--text-hi);
+  stroke-width: 2.5;
+}
+
+.knob--vintage .knob__pointer {
+  stroke-width: 3;
+}
+
+.knob__readout {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.knob__value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-hi);
+}
+
+.knob__derived {
+  font-size: 10.5px;
+  color: var(--text-lo);
+}
+
+.knob__label {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-lo);
+}
+
+.eq-wrap {
+  padding: var(--step-2) 0;
+}
+
+.eq {
+  display: block;
+  width: 100%;
+  height: 150px;
+  touch-action: none;
+}
+
+.eq__grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.eq__unity {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.eq__curve {
+  stroke: var(--text-hi);
+  stroke-width: 1.6;
+}
+
+.eq__node {
+  fill: var(--surface-3);
+  stroke: var(--text-hi);
+  stroke-width: 1.4;
+  cursor: grab;
+}
+
+.eq__node:hover,
+.eq__node.is-dragging {
+  fill: var(--text-hi);
+}
+
+.eq__node:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.meter {
+  padding: var(--step-1) 0 var(--step-2);
+}
+
+.meter__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--step-2);
+  margin-bottom: 4px;
+}
+
+.meter__label {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-lo);
+}
+
+.meter__readout {
+  font-size: 11px;
+  color: var(--text-lo);
+  font-variant-numeric: tabular-nums;
+}
+
+.meter__track {
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.meter__fill {
+  height: 100%;
+  width: 0%;
+  background: var(--text-lo);
+  transition: width 60ms linear;
+}
+
+.meter--hot .meter__fill {
+  background: var(--text-hi);
+}
+
+/* Panels a plugin docked into the now-playing pane. */
+.docks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--step-4);
+  margin-top: var(--step-5);
+  padding-top: var(--step-4);
+  border-top: 1px solid var(--line);
+}
+
+.dock__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--step-2);
+  margin-bottom: var(--step-1);
+}
+
+.dock__title {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-lo);
+}
+
+.dock__source {
+  font-size: 10.5px;
+  color: var(--text-lo);
+  opacity: 0.8;
+}
+
+.dock .widgets {
+  padding: 0;
+}
+
+/* Row for a contributed panel in Settings. */
+.panel-list {
+  margin-top: var(--step-3);
+  padding-top: var(--step-3);
+  border-top: 1px solid var(--line);
+}
+
+.panel-list .section-label {
+  padding: 0 0 var(--step-2);
+}
+
+.panel-row {
+  display: flex;
+  align-items: center;
+  gap: var(--step-3);
+  padding: var(--step-2) 0;
+}
+
+.panel-row__body {
+  flex: 1;
+  min-width: 0;
+}
+
+/* --------------------------------------------------------------------------
+   9c. Panel overlay
+   Where a plugin's `popout` panel is presented: a floating sheet over the app,
+   opened from the plugin manager.
+   -------------------------------------------------------------------------- */
+.modal--panel {
+  width: min(560px, calc(100vw - 48px));
+}
+
+.panel-dialog__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--step-3);
+  padding: var(--step-4) var(--step-5) var(--step-3);
+  border-bottom: 1px solid var(--line);
+}
+
+.panel-dialog__close {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+  color: var(--text-lo);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+
+.panel-dialog__close:hover {
+  background: var(--surface-2);
+  color: var(--text-hi);
+}
+
+.panel-dialog__body {
+  padding: var(--step-4) var(--step-5) var(--step-5);
+  max-height: min(60vh, 520px);
+  overflow-y: auto;
+}
+
+.panel-dialog__body .widgets {
+  padding: 0;
+}
+
+/* --------------------------------------------------------------------------
    10. Empty states & notices
    -------------------------------------------------------------------------- */
 .empty {

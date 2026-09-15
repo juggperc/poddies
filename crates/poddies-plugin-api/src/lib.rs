@@ -27,8 +27,10 @@ pub mod ui;
 
 pub use library::{HistoryEntry, ShowSummary};
 pub use manifest::{Capability, PluginInfo, PluginManifest, Runtime};
-pub use protocol::{Envelope, PluginError, Reply, PROTOCOL_VERSION};
-pub use ui::{PanelContent, UiPanelDescriptor, Widget};
+pub use protocol::{AudioGraph, AudioUnit, Envelope, PluginError, Reply, WidgetChange, PROTOCOL_VERSION};
+pub use ui::{
+    EqBand, EqBandKind, KnobStyle, MeterSource, PanelContent, Placement, UiPanelDescriptor, Widget,
+};
 
 /// Re-exported so plugins depend on exactly the same domain types the host
 /// uses, and never on a divergent copy.

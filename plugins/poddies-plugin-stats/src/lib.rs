@@ -38,10 +38,7 @@ impl Plugin for Stats {
             name: "Listening Stats".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             protocol: PROTOCOL_VERSION.to_string(),
-            ui_panels: vec![UiPanelDescriptor {
-                id: PANEL_ID.to_string(),
-                title: "Listening".to_string(),
-            }],
+            ui_panels: vec![UiPanelDescriptor::sidebar(PANEL_ID, "Listening")],
         }
     }
 

@@ -1,0 +1,10 @@
+{
+  "id": "dev.poddies.compressor",
+  "name": "Compressor",
+  "version": "0.1.0",
+  "protocol": "1.0",
+  "description": "A one-knob vintage compressor, docked under the speed control.",
+  "author": "Poddies",
+  "capabilities": ["ui-panel", "audio-effects"],
+  "runtime": { "kind": "native", "library": "poddies_plugin_compressor.dll" }
+}

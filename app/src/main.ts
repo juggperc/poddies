@@ -1,5 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 
+import * as engine from "./audio";
+import { paintMeters, renderWidget as renderPluginWidget, type WidgetHost } from "./widgets";
 import {
   api,
   type DiscoveryItemView,
@@ -10,7 +12,6 @@ import {
   type PluginStatusView,
   type SearchView,
   type Weights,
-  type Widget,
 } from "./api";
 
 /* ------------------------------------------------------------------ state */
@@ -60,6 +61,9 @@ const state = {
   avoidExplicit: false,
   episodes: [] as EpisodeView[],
   panelContent: null as PanelContent | null,
+  /** Panel content by `<plugin_index>:<panel_id>`, so the docked and popout
+   * panels can render from cache without a round trip per frame. */
+  panelContents: new Map<string, PanelContent>(),
   current: null as EpisodeView | null,
   playing: false,
   position: 0,
@@ -224,6 +228,10 @@ const dom = {
   close: document.getElementById("btn-close") as HTMLButtonElement,
   search: document.getElementById("library-search") as HTMLInputElement,
   searchClear: document.getElementById("library-search-clear") as HTMLButtonElement,
+  panelDialog: document.getElementById("panel-dialog") as HTMLDialogElement,
+  panelDialogTitle: document.getElementById("panel-dialog-title") as HTMLElement,
+  panelDialogBody: document.getElementById("panel-dialog-body") as HTMLElement,
+  panelDialogClose: document.getElementById("panel-dialog-close") as HTMLButtonElement,
   addFeedOpen: document.getElementById("add-feed-open") as HTMLButtonElement,
   addFeedDialog: document.getElementById("add-feed") as HTMLDialogElement,
   addFeedForm: document.getElementById("add-feed-form") as HTMLFormElement,
@@ -384,6 +392,9 @@ async function playEpisode(episode: EpisodeView): Promise<void> {
     showStatus("Couldn't play this episode");
   }
 
+  // A browser keeps the audio context suspended until a gesture.
+  void engine.resume();
+
   void api.playbackStarted(episode.id);
   updateMediaSession(episode);
   renderMiddle();
@@ -393,6 +404,7 @@ async function playEpisode(episode: EpisodeView): Promise<void> {
 function togglePlay(): void {
   if (!state.current) return;
   if (audio.paused) {
+    void engine.resume();
     void audio.play().then(() => {
       state.playing = true;
       renderNowPlaying();
@@ -479,7 +491,9 @@ function renderLibrary(): void {
     ),
   ];
 
-  for (const panel of state.panels) {
+  // Only panels that asked for the library's navigation appear there; docked
+  // and popout panels are placed elsewhere.
+  for (const panel of state.panels.filter((entry) => entry.placement === "sidebar")) {
     primary.push(
       navItem(
         `panel:${panel.plugin_id}:${panel.plugin_index}:${panel.panel_id}`,
@@ -1048,7 +1062,45 @@ function pluginsSection(): HTMLElement {
       { class: "plugin-list" },
       state.statuses.map((status) => pluginRow(status)),
     ),
+    panelsList(),
     folder,
+  ]);
+}
+
+/**
+ * Where each contributed panel lives. Popout panels get a button to open their
+ * window; the others are already placed, so they just say where.
+ */
+function panelsList(): HTMLElement | null {
+  if (state.panels.length === 0) return null;
+
+  const where: Record<string, string> = {
+    sidebar: "In the library",
+    now_playing: "Under the speed control",
+    popout: "Own window",
+  };
+
+  return el("div", { class: "panel-list" }, [
+    el("div", { class: "section-label", text: "Panels" }),
+    ...state.panels.map((panel) =>
+      el("div", { class: "panel-row" }, [
+        el("div", { class: "panel-row__body" }, [
+          el("div", { class: "plugin-row__name" }, [
+            panel.title,
+            el("span", { class: "plugin-row__version", text: panel.plugin_name }),
+          ]),
+          el("div", { class: "plugin-row__detail", text: where[panel.placement] ?? "" }),
+        ]),
+        panel.placement === "popout"
+          ? el("button", {
+              class: "link-btn",
+              attrs: { type: "button" },
+              text: "Open",
+              on: { click: () => void openPanelOverlay(panel) },
+            })
+          : null,
+      ]),
+    ),
   ]);
 }
 
@@ -1109,6 +1161,11 @@ async function refreshPlugins(): Promise<void> {
   state.panels = panels;
   state.statuses = statuses;
   state.panelContent = null;
+  // Drop cached content for panels that no longer exist, then refill.
+  const live = new Set(panels.map((panel) => panelKey(panel.plugin_index, panel.panel_id)));
+  for (const key of [...state.panelContents.keys()]) {
+    if (!live.has(key)) state.panelContents.delete(key);
+  }
 
   // The panel that was open may belong to the plugin that just changed.
   if (state.route.kind === "panel") {
@@ -1121,6 +1178,9 @@ async function refreshPlugins(): Promise<void> {
   }
   // A disabled discovery source leaves a stale queue behind.
   state.discovery = [];
+
+  await loadAllPanels();
+  await refreshAudio();
 }
 
 async function reloadPlugin(status: PluginStatusView): Promise<void> {
@@ -1212,60 +1272,118 @@ function panelView(pluginIndex: number, panelId: string): HTMLElement {
 
   return el("div", {}, [
     header(panel?.title ?? "Panel", "", false, panel?.plugin_name ?? ""),
-    el(
-      "div",
-      { class: "widgets" },
-      content.widgets
-        .map(renderWidget)
-        .filter((node): node is HTMLElement => node !== null),
-    ),
+    panelWidgets(content, pluginIndex, panelId),
   ]);
 }
 
+/** Render a panel's widgets with a host that relays control movements back. */
+function panelWidgets(
+  content: PanelContent,
+  pluginIndex: number,
+  panelId: string,
+): HTMLElement {
+  const host: WidgetHost = {
+    onChange: (widgetId, value) => void changeWidget(pluginIndex, panelId, widgetId, value),
+  };
+  return el(
+    "div",
+    { class: "widgets" },
+    content.widgets
+      .map((widget) => renderPluginWidget(widget, host))
+      .filter((node): node is HTMLElement => node !== null),
+  );
+}
+
 /**
- * Widgets are a closed set, but a plugin built against a newer minor protocol
- * can send a type this build doesn't know. Unknown types are skipped rather
- * than rendered as garbage.
+ * Forward a control movement to the plugin, then pick up what changed.
+ *
+ * The notification is fire-and-forget so a drag never stutters; the panel
+ * re-render and the audio graph refresh are throttled, and the last one always
+ * lands so the final value is never dropped.
  */
-function renderWidget(widget: Widget): HTMLElement | null {
-  switch (widget.type) {
-    case "heading":
-      return el("div", { class: "widget__heading", text: widget.text });
-    case "text":
-      return el("p", { class: "widget__text", text: widget.text });
-    case "divider":
-      return el("div", { class: "widget__divider" });
-    case "metric":
-      return el("div", {}, [
-        el("div", { class: "metric__value", text: widget.value }),
-        el("div", { class: "metric__label", text: widget.label }),
-      ]);
-    case "bar": {
-      const ratio = widget.max > 0 ? Math.min(1, Math.max(0, widget.value / widget.max)) : 0;
-      return el("div", { class: "bar" }, [
-        el("div", { class: "bar__head" }, [
-          el("span", { text: widget.label }),
-          el("span", { text: `${Math.round(ratio * 100)}%` }),
-        ]),
-        el("div", { class: "bar__track" }, [
-          el("span", { class: "bar__fill", attrs: { style: `width:${(ratio * 100).toFixed(1)}%` } }),
-        ]),
-      ]);
-    }
-    case "list":
-      return el(
-        "div",
-        { class: "list" },
-        widget.items.map((item) =>
-          el("div", { class: "list__row" }, [
-            el("span", { text: item.primary }),
-            item.secondary ? el("span", { class: "list__secondary", text: item.secondary }) : null,
-          ]),
-        ),
-      );
-    default:
-      return null;
+function changeWidget(
+  pluginIndex: number,
+  panelId: string,
+  widgetId: string,
+  value: unknown,
+): void {
+  void api.pluginPanelChange(pluginIndex, panelId, widgetId, value).catch(() => {});
+
+  pendingChanges.set(`${pluginIndex}:${panelId}`, { pluginIndex, panelId });
+  window.clearTimeout(changeTimer);
+  changeTimer = window.setTimeout(flushPanelChanges, 90);
+}
+
+let changeTimer: number | undefined;
+const pendingChanges = new Map<string, { pluginIndex: number; panelId: string }>();
+
+async function flushPanelChanges(): Promise<void> {
+  const panels = [...pendingChanges.values()];
+  pendingChanges.clear();
+  if (panels.length === 0) return;
+
+  await Promise.all(
+    panels.map(async ({ pluginIndex, panelId }) => {
+      try {
+        const content = await api.pluginPanelContent(pluginIndex, panelId);
+        state.panelContents.set(panelKey(pluginIndex, panelId), content);
+        if (state.route.kind === "panel" && state.route.panelId === panelId) {
+          state.panelContent = content;
+        }
+      } catch {
+        /* the plugin may have stopped mid-drag */
+      }
+    }),
+  );
+
+  await refreshAudio();
+  renderMiddle();
+  renderNowPlaying();
+}
+
+function panelKey(pluginIndex: number, panelId: string): string {
+  return `${pluginIndex}:${panelId}`;
+}
+
+/**
+ * Rebuild the playback chain from what the plugins currently want. Called on
+ * start-up, whenever a plugin is loaded or unloaded, and after any control
+ * movement that could change a parameter.
+ */
+async function refreshAudio(): Promise<void> {
+  try {
+    const units = await api.audioGraph();
+    // Only touch the element once a plugin actually wants audio: until then it
+    // plays directly, exactly as if no plugin existed.
+    if (units.length > 0) engine.attach(audio);
+    engine.apply(units);
+  } catch (error) {
+    console.error("[poddies] audio graph refresh failed:", error);
   }
+}
+
+/**
+ * Panels a plugin asked to dock in the now-playing pane — controls you want at
+ * hand while listening, like the compressor's one knob.
+ */
+function dockedPanels(): HTMLElement | null {
+  const docked = state.panels.filter((panel) => panel.placement === "now_playing");
+  if (docked.length === 0) return null;
+
+  const blocks = docked.map((panel) => {
+    const content = state.panelContents.get(panelKey(panel.plugin_index, panel.panel_id));
+    return el("section", { class: "dock" }, [
+      el("div", { class: "dock__head" }, [
+        el("span", { class: "dock__title", text: panel.title }),
+        panel.plugin_name ? el("span", { class: "dock__source", text: panel.plugin_name }) : null,
+      ]),
+      content
+        ? panelWidgets(content, panel.plugin_index, panel.panel_id)
+        : el("p", { class: "widget__text", text: "Loading…" }),
+    ]);
+  });
+
+  return el("div", { class: "docks" }, blocks);
 }
 
 let nowRefs: { scrub: HTMLInputElement; elapsed: HTMLElement; total: HTMLElement } | null = null;
@@ -1275,13 +1393,17 @@ function renderNowPlaying(): void {
 
   if (!episode) {
     dom.now.replaceChildren(
-      el("div", { class: "now" }, [
-        el("div", { class: "now__art now__art--empty", attrs: { "aria-hidden": "true" } }, [
-          svg(GLYPH.play, 22),
-        ]),
-        el("div", { class: "now__meta" }, [
-          el("p", { class: "now__episode", text: "Choose an episode to begin." }),
-        ]),
+      el("div", { class: "pane__scroll" }, [
+        el("div", { class: "now" }, [
+          el("div", { class: "now__art now__art--empty", attrs: { "aria-hidden": "true" } }, [
+            svg(GLYPH.play, 22),
+          ]),
+          el("div", { class: "now__meta" }, [
+            el("p", { class: "now__episode", text: "Choose an episode to begin." }),
+          ]),
+          // Controls a plugin docked here stay available with nothing playing.
+          dockedPanels(),
+        ].filter((node): node is HTMLElement => node !== null)),
       ]),
     );
     nowRefs = null;
@@ -1362,6 +1484,7 @@ function renderNowPlaying(): void {
           ]),
         ]),
         el("div", { class: "now__rate" }, rates),
+        dockedPanels(),
         !canPlay
           ? el("p", { class: "widget__text", text: "This episode has no audio attached." })
           : null,
@@ -1457,12 +1580,9 @@ async function setRoute(route: Route): Promise<void> {
   }
 
   if (route.kind === "panel") {
-    state.panelContent = null;
-    try {
-      state.panelContent = await api.pluginPanelContent(route.pluginIndex, route.panelId);
-    } catch (error) {
-      showStatus(String(error));
-    }
+    await loadPanel(route.pluginIndex, route.panelId);
+    state.panelContent =
+      state.panelContents.get(panelKey(route.pluginIndex, route.panelId)) ?? null;
   }
 
   if (route.kind === "discovery" && state.discovery.length === 0) {
@@ -1472,6 +1592,58 @@ async function setRoute(route: Route): Promise<void> {
   render();
 }
 
+/* --------------------------------------------------------- panel overlay */
+
+/** Fetch one panel's content into the cache. */
+async function loadPanel(pluginIndex: number, panelId: string): Promise<void> {
+  try {
+    const content = await api.pluginPanelContent(pluginIndex, panelId);
+    state.panelContents.set(panelKey(pluginIndex, panelId), content);
+  } catch (error) {
+    console.error(`[poddies] panel '${panelId}' failed:`, error);
+  }
+}
+
+/** Load every panel the plugins advertise, for the dock and the overlay. */
+async function loadAllPanels(): Promise<void> {
+  await Promise.all(
+    state.panels.map((panel) => loadPanel(panel.plugin_index, panel.panel_id)),
+  );
+}
+
+/**
+ * Present a plugin panel that asked for `popout` placement.
+ *
+ * The host presents it as a floating sheet over the app rather than a second OS
+ * window: it inherits the window's Mica, typography and motion, it needs no
+ * separate webview (and therefore no separate permissions or asset load), and a
+ * plugin author gets the same rendering as every other surface for free.
+ */
+async function openPanelOverlay(panel: PanelView): Promise<void> {
+  dom.panelDialogTitle.textContent = panel.title;
+
+  const key = panelKey(panel.plugin_index, panel.panel_id);
+  if (!state.panelContents.has(key)) {
+    await loadPanel(panel.plugin_index, panel.panel_id);
+  }
+
+  const content = state.panelContents.get(key);
+  dom.panelDialogBody.replaceChildren(
+    content
+      ? panelWidgets(content, panel.plugin_index, panel.panel_id)
+      : el("p", { class: "widget__text", text: "That panel is not responding." }),
+  );
+
+  if (!dom.panelDialog.open) dom.panelDialog.showModal();
+}
+
+function installPanelDialog(): void {
+  dom.panelDialogClose.addEventListener("click", () => dom.panelDialog.close());
+  dom.panelDialog.addEventListener("click", (event) => {
+    if (event.target === dom.panelDialog) dom.panelDialog.close();
+  });
+}
+
 /* ------------------------------------------------------------------- boot */
 
 async function boot(): Promise<void> {
@@ -1479,6 +1651,7 @@ async function boot(): Promise<void> {
   installSearchField();
   installWindowDragging();
   installAddFeedDialog();
+  installPanelDialog();
 
   dom.minimize.addEventListener("click", () => void api.appHide());
   dom.close.addEventListener("click", () => void api.appHide());
@@ -1547,7 +1720,27 @@ async function boot(): Promise<void> {
   }
 
   render();
+  await loadAllPanels();
+  await refreshAudio();
+  render();
+  installMeterLoop();
   void loadDiscovery();
+}
+
+/**
+ * Paint the plugin meters from the live audio graph. Values never travel
+ * through a plugin, so this is a DOM write per frame while something plays.
+ */
+function installMeterLoop(): void {
+  const tick = () => {
+    const meters = document.querySelectorAll("[data-meter]");
+    if (meters.length > 0) {
+      const { peakDb, reductionDb } = engine.readMeters();
+      paintMeters(document, peakDb, reductionDb);
+    }
+    window.setTimeout(tick, 80);
+  };
+  window.setTimeout(tick, 400);
 }
 
 void boot();

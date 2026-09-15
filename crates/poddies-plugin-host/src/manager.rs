@@ -18,8 +18,8 @@ use serde_json::Value;
 
 use poddies_plugin_api::manifest::{Capability, PluginManifest};
 use poddies_plugin_api::protocol::{
-    methods, DiscoveryRequest, DiscoveryResponse, Envelope, LogRequest, PanelRequest, PluginError,
-    Reply,
+    methods, AudioGraph, AudioUnit, DiscoveryRequest, DiscoveryResponse, Envelope, LogRequest,
+    PanelRequest, PluginError, Reply, WidgetChange,
 };
 use poddies_plugin_api::ui::{PanelContent, UiPanelDescriptor};
 use poddies_plugin_api::{DiscoveryCandidate, PluginInfo};
@@ -608,6 +608,51 @@ impl PluginHost {
         }
     }
 
+    /// Tell one plugin that a control in one of its panels moved. Fire and
+    /// forget: the plugin answers with fresh state the next time the host asks
+    /// for the panel.
+    pub fn notify_change(&self, index: usize, change: &WidgetChange) -> Result<(), PluginError> {
+        let plugin = self
+            .plugins
+            .get(index)
+            .ok_or_else(|| PluginError::new("unknown_plugin", format!("no plugin at {index}")))?;
+        if !plugin.has(Capability::UiPanel) {
+            return Err(PluginError::new(
+                "capability_denied",
+                format!("'{}' did not declare ui-panel", plugin.manifest.id),
+            ));
+        }
+        let payload = serde_json::to_value(change)
+            .map_err(|error| PluginError::new("serialize_failed", error.to_string()))?;
+        plugin.notify(methods::UI_CHANGE, payload)
+    }
+
+    /// Collect the audio units every enabled plugin wants in the playback
+    /// chain, in plugin order. A unit's id is prefixed with the plugin id so two
+    /// plugins cannot collide.
+    pub fn audio_graph(&self) -> Vec<AudioUnit> {
+        let mut units = Vec::new();
+        for plugin in &self.plugins {
+            if !plugin.has(Capability::AudioEffects) || !plugin.is_alive() {
+                continue;
+            }
+            match plugin.request(methods::AUDIO_GRAPH, Value::Null) {
+                Ok(value) => match serde_json::from_value::<AudioGraph>(value) {
+                    Ok(graph) => units.extend(graph.units.into_iter().map(|unit| qualify(plugin, unit))),
+                    Err(error) => eprintln!(
+                        "[poddies] plugin '{}' returned a malformed audio graph: {error}",
+                        plugin.manifest.id
+                    ),
+                },
+                Err(error) => eprintln!(
+                    "[poddies] plugin '{}' audio/graph failed: {}",
+                    plugin.manifest.id, error.message
+                ),
+            }
+        }
+        units
+    }
+
     /// Restart a plugin in place. Used by hot-reload and by crash recovery.
     pub fn reload(&mut self, index: usize) -> Result<(), PluginError> {
         let directory = self
@@ -655,8 +700,17 @@ impl Drop for PluginHost {
     }
 }
 
-fn handle_host_request(services: &dyn HostServices, envelope: &Envelope) -> Reply {
-    match envelope.method.as_str() {
+/// Namespace a unit's id with its plugin, so two plugins cannot collide in the
+/// merged graph and the interface can attribute a unit to its owner.
+fn qualify(plugin: &LoadedPlugin, mut unit: AudioUnit) -> AudioUnit {
+    let qualified = format!("{}::{}", plugin.manifest.id, unit.id());
+    match &mut unit {
+        AudioUnit::ParametricEq { id, .. } | AudioUnit::Compressor { id, .. } => *id = qualified,
+    }
+    unit
+}
+
+fn handle_host_request(services: &dyn HostServices, envelope: &Envelope) -> Reply {    match envelope.method.as_str() {
         methods::HOST_LIBRARY_SHOWS => Reply::ok(envelope.id, services.library_shows()),
         methods::HOST_LIBRARY_HISTORY => Reply::ok(envelope.id, services.library_history()),
         methods::HOST_LOG => {

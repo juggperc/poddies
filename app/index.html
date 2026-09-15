@@ -89,6 +89,18 @@
       </form>
     </dialog>
 
+    <dialog id="panel-dialog" class="modal modal--panel" aria-labelledby="panel-dialog-title">
+      <div class="panel-dialog__head">
+        <h2 id="panel-dialog-title" class="modal__title"></h2>
+        <button id="panel-dialog-close" class="panel-dialog__close" type="button" aria-label="Close">
+          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+            <path d="M1 1l8 8M9 1L1 9" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" />
+          </svg>
+        </button>
+      </div>
+      <div id="panel-dialog-body" class="panel-dialog__body"></div>
+    </dialog>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

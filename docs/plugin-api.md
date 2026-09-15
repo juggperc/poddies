@@ -57,7 +57,9 @@ inside a handler, which is how `host_call` is implemented.
 | `describe` | request | — | `PluginInfo` |
 | `ui/panel` | request | `{ panel_id }` | `{ panel_id, widgets[] }` |
 | `discovery/list` | request | `{ limit, topics[] }` | `{ candidates[] }` |
+| `audio/graph` | request | — | `{ units[] }` |
 | `shutdown` | both | — | none |
+| `ui/change` | notification | `WidgetChange` | — |
 | `event/playback-started` | notification | `PlaybackEvent` | — |
 | `event/playback-progress` | notification | `PlaybackEvent` | — |
 | `event/playback-completed` | notification | `PlaybackEvent` | — |
@@ -75,6 +77,16 @@ inside a handler, which is how `host_call` is implemented.
 ```json
 { "episode_id": "ep_…", "show_id": "sh_…", "title": "…",
   "position_secs": 1234.0, "duration_secs": 2400 }
+```
+
+`WidgetChange` — a control the user moved. `value` is passed through
+uninterpreted: a number for a knob or slider, a boolean for a toggle, an object
+for a compound control such as an EQ node.
+
+```json
+{ "panel_id": "dial", "widget_id": "amount", "value": 0.42 }
+{ "panel_id": "curve", "widget_id": "curve",
+  "value": { "band_id": "mid", "gain_db": 4.5, "frequency": 1000 } }
 ```
 
 ---
@@ -95,15 +107,53 @@ Data shapes are defined once in `poddies-plugin-api::library`. See
 ## Widgets
 
 ```jsonc
+// display
 { "type": "heading", "text": "…" }
 { "type": "metric",  "label": "Episodes", "value": "128" }
 { "type": "text",    "text": "…" }
 { "type": "divider" }
 { "type": "bar",     "label": "Completion", "value": 0.8, "max": 1.0 }
 { "type": "list",    "items": [ { "primary": "…", "secondary": "…" } ] }
+
+// interactive — `id` comes back in a ui/change notification
+{ "type": "knob",    "id": "amount", "label": "Amount", "value": 0.35,
+  "min": 0.0, "max": 1.0, "unit": "", "style": "vintage",
+  "readout": "2.4:1 · -9 dB" }
+{ "type": "slider",  "id": "trim", "label": "Trim", "value": -2.0,
+  "min": -12.0, "max": 12.0, "step": 0.5, "unit": "dB" }
+{ "type": "toggle",  "id": "bypass", "label": "Bypass", "value": false }
+{ "type": "eq",      "id": "curve", "bands": [
+    { "id": "low", "label": "Low", "frequency": 90.0, "gain_db": 0.0,
+      "q": 0.7, "kind": "low_shelf" } ] }
+{ "type": "meter",   "id": "gr", "label": "Gain reduction",
+  "source": "gain_reduction", "min_db": -18.0, "max_db": 0.0 }
 ```
 
+`knob.style` is `modern` or `vintage`; `eq` bands are `peaking`, `low_shelf` or
+`high_shelf`; `meter.source` is `peak` or `gain_reduction`. Meter values come
+from the live audio graph, not from the plugin — the host paints them.
+
 Unknown types are skipped, so the widget set can grow additively.
+
+---
+
+## Audio units
+
+Returned from `audio/graph`. The plugin supplies parameters; the host builds the
+nodes on the audio thread. Units apply in the order returned.
+
+```jsonc
+{ "type": "parametric_eq", "id": "eq", "enabled": true,
+  "bands": [ { "id": "low", "label": "Low", "frequency": 90.0,
+               "gain_db": 2.0, "q": 0.7, "kind": "low_shelf" } ] }
+
+{ "type": "compressor", "id": "comp", "enabled": true,
+  "threshold_db": -18.0, "ratio": 4.0, "attack_ms": 8.0,
+  "release_ms": 400.0, "knee_db": 6.0, "makeup_db": 2.0 }
+```
+
+Requires the `audio-effects` capability. A `parametric_eq` band is one biquad;
+`enabled: false` bypasses a unit without removing it from the graph.
 
 ---
 

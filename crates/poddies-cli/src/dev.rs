@@ -193,9 +193,18 @@ fn describe_widget(widget: &Widget) -> String {
         Widget::Heading { text } => format!("# {text}"),
         Widget::Metric { label, value } => format!("{value}  {label}"),
         Widget::Text { text } => text.clone(),
-        Widget::Divider => "─".to_string(),
+        Widget::Divider => "\u{2500}".to_string(),
         Widget::Bar { label, value, max } => format!("[{label}] {value}/{max}"),
         Widget::List { items } => format!("list of {}", items.len()),
+        Widget::Knob { label, value, style, readout, .. } => format!(
+            "knob '{label}' = {value} ({:?}){}",
+            style,
+            readout.as_deref().map(|r| format!("  {r}")).unwrap_or_default()
+        ),
+        Widget::Slider { label, value, unit, .. } => format!("slider '{label}' = {value} {unit}"),
+        Widget::Toggle { label, value, .. } => format!("toggle '{label}' = {value}"),
+        Widget::Eq { bands, .. } => format!("eq curve, {} bands", bands.len()),
+        Widget::Meter { label, source, .. } => format!("meter '{label}' from {source:?}"),
     }
 }
 

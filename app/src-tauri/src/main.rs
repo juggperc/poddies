@@ -74,6 +74,8 @@ fn main() {
             commands::set_avoid_explicit,
             commands::plugin_panels,
             commands::plugin_panel_content,
+            commands::plugin_panel_change,
+            commands::audio_graph,
             commands::plugin_status,
             commands::plugins_directory,
             commands::plugin_reload,

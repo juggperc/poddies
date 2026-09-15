@@ -115,6 +115,51 @@ impl Plugin for MyStats {
 export_plugin!(MyStats);
 ```
 
+### Custom UI, three ways
+
+A panel says where it wants to live, and the plugin gets a real interface —
+not a settings list:
+
+| Placement | Where it appears | Good for |
+|---|---|---|
+| `sidebar` | A section in the library, listed with the navigation | stats, reading lists |
+| `now_playing` | Docked in the now-playing pane, under the speed control | controls you want at hand while listening |
+| `popout` | A floating sheet opened from the plugin manager | anything that needs room — a curve, a spectrum |
+
+Widgets are declarative and **interactive**. A plugin gives a control an `id`,
+the host reports the movement with a `ui/change` notification, and the plugin
+answers the next `ui/panel` with fresh state:
+
+```rust
+Widget::Knob   { id: "amount", label: "Amount", value: 0.35, style: KnobStyle::Vintage, .. }
+Widget::Slider { id: "trim",   label: "Trim",   value: -2.0, unit: "dB", .. }
+Widget::Toggle { id: "bypass", label: "Bypass", value: false }
+Widget::Eq     { id: "curve",  bands, .. }
+Widget::Meter  { id: "gr",     label: "Gain reduction", source: MeterSource::GainReduction, .. }
+```
+
+Plugins do not ship HTML, CSS or JavaScript. The host draws every control, which
+is why a panel looks like the rest of the app in both the window and the popout,
+and why a plugin cannot inject markup into the webview.
+
+### Plugins and the audio pipeline
+
+A plugin can put its own processing in the playback chain, without touching a
+single sample. It declares the units it wants from `audio/graph` and the host
+builds real Web Audio nodes:
+
+```rust
+AudioUnit::ParametricEq { id: "eq", bands: vec![/* low shelf, peaks, high shelf */] }
+AudioUnit::Compressor   { id: "comp", threshold_db: -18.0, ratio: 4.0,
+                          attack_ms: 8.0, release_ms: 400.0, makeup_db: 2.0, .. }
+```
+
+The plugin supplies **parameters**, the host owns the **DSP**. That split is what
+keeps it fast and keeps it honest: nothing crosses the process boundary per
+sample, so latency is unchanged, and a plugin written in Python is exactly as
+viable as one in Rust. The `meter` widget is filled by the host straight from
+the live graph, so a gain-reduction meter is real rather than reported.
+
 Two reference plugins ship in [`plugins/`](plugins) and cover the whole
 lifecycle, each built as a real `.dll`:
 
@@ -122,11 +167,13 @@ lifecycle, each built as a real `.dll`:
 |---|---|---|
 | **Listening Stats** | `ui-panel`, `library-read` | host calls, aggregating history, declarative widgets |
 | **Apple Podcasts** | `discovery-source` | feeding the Discovery queue from the public Apple Podcasts API (no key), caching, offline fallback |
+| **Parametric EQ** | `ui-panel`, `audio-effects` | a five-band curve in a popout, where the drawn response comes from the same coefficients as the audio |
+| **Compressor** | `ui-panel`, `audio-effects` | one vintage knob that moves four compressor parameters, docked under the speed control, with a live gain-reduction meter |
 
-Settings lists every plugin with its state and a Reload button, and lets you
-disable one: it stops at once, its panel leaves the sidebar, and it contributes
-nothing to Discovery until you enable it again. The choice survives a restart.
-"Open folder" shows you where to drop a plugin.
+Settings lists every plugin with its state, a Reload button and an on/off
+switch: disabling stops it at once, takes its panel out of the interface and
+stops it contributing to Discovery, and the choice survives a restart. "Open
+folder" shows you where to drop a plugin.
 
 | | |
 |---|---|
@@ -163,7 +210,7 @@ docs/                        authoring guide, API reference, architecture
 ```
 
 ```powershell
-cargo test --workspace      # 43 tests across five crates
+cargo test --workspace      # 46 tests across five crates
 cargo clippy --workspace --all-targets
 ```
 

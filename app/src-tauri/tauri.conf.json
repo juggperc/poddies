@@ -55,6 +55,10 @@
       "../../plugins/poddies-plugin-stats/poddies_plugin_stats.dll": "plugins/dev.poddies.stats/poddies_plugin_stats.dll",
       "../../plugins/poddies-plugin-apple-podcasts/plugin.json": "plugins/dev.poddies.apple-podcasts/plugin.json",
       "../../plugins/poddies-plugin-apple-podcasts/poddies_plugin_apple_podcasts.dll": "plugins/dev.poddies.apple-podcasts/poddies_plugin_apple_podcasts.dll",
+      "../../plugins/poddies-plugin-eq/plugin.json": "plugins/dev.poddies.eq/plugin.json",
+      "../../plugins/poddies-plugin-eq/poddies_plugin_eq.dll": "plugins/dev.poddies.eq/poddies_plugin_eq.dll",
+      "../../plugins/poddies-plugin-compressor/plugin.json": "plugins/dev.poddies.compressor/plugin.json",
+      "../../plugins/poddies-plugin-compressor/poddies_plugin_compressor.dll": "plugins/dev.poddies.compressor/poddies_plugin_compressor.dll",
       "../../python/poddies/__init__.py": "python/poddies/__init__.py"
     },
     "windows": {

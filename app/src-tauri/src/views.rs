@@ -7,6 +7,8 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
+use poddies_plugin_api::ui::Placement;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ShowView {
     pub id: String,
@@ -70,6 +72,9 @@ pub struct PanelView {
     pub plugin_name: String,
     pub panel_id: String,
     pub title: String,
+    /// Where the host should put it: a sidebar section, docked in the
+    /// now-playing pane, or its own window.
+    pub placement: Placement,
 }
 
 #[derive(Debug, Clone, Serialize)]

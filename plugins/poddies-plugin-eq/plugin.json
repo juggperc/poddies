@@ -1,0 +1,10 @@
+{
+  "id": "dev.poddies.eq",
+  "name": "Parametric EQ",
+  "version": "0.1.0",
+  "protocol": "1.0",
+  "description": "A five-band parametric equaliser in its own window.",
+  "author": "Poddies",
+  "capabilities": ["ui-panel", "audio-effects"],
+  "runtime": { "kind": "native", "library": "poddies_plugin_eq.dll" }
+}

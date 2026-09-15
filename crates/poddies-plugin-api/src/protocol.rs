@@ -20,9 +20,12 @@ pub mod methods {
     pub const DESCRIBE: &str = "describe";
     pub const UI_PANEL: &str = "ui/panel";
     pub const DISCOVERY_LIST: &str = "discovery/list";
+    pub const AUDIO_GRAPH: &str = "audio/graph";
 
     // Host -> plugin, notification.
     pub const SHUTDOWN: &str = "shutdown";
+    /// A control the user moved. Answer the next `ui/panel` with new state.
+    pub const UI_CHANGE: &str = "ui/change";
     pub const EVENT_PLAYBACK_STARTED: &str = "event/playback-started";
     pub const EVENT_PLAYBACK_PROGRESS: &str = "event/playback-progress";
     pub const EVENT_PLAYBACK_COMPLETED: &str = "event/playback-completed";
@@ -150,6 +153,72 @@ pub struct DiscoveryResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PanelRequest {
     pub panel_id: String,
+}
+
+/// A control the user moved, delivered as the `ui/change` notification.
+///
+/// `value` is whatever the widget reports: a number for a knob or slider, a
+/// boolean for a toggle, and an object for a compound control such as an EQ
+/// node (`{"band_id": "...", "gain_db": ...}`). The host passes it through
+/// without interpreting it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WidgetChange {
+    pub panel_id: String,
+    pub widget_id: String,
+    pub value: Value,
+}
+
+/// Result of `audio/graph`: the DSP the plugin wants in the playback chain,
+/// in the order it should be applied.
+///
+/// The plugin supplies **parameters**, not code. The host builds the actual
+/// nodes, which keeps a plugin out of the audio thread and keeps latency at
+/// zero — nothing crosses the process boundary per sample.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AudioGraph {
+    #[serde(default)]
+    pub units: Vec<AudioUnit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AudioUnit {
+    /// A bank of peaking and shelf filters, one biquad per band.
+    ParametricEq {
+        id: String,
+        #[serde(default = "yes")]
+        enabled: bool,
+        bands: Vec<crate::ui::EqBand>,
+    },
+    /// A dynamics compressor followed by makeup gain.
+    Compressor {
+        id: String,
+        #[serde(default = "yes")]
+        enabled: bool,
+        /// dBFS at which compression starts.
+        threshold_db: f64,
+        /// Compression ratio, e.g. 4.0 for 4:1.
+        ratio: f64,
+        attack_ms: f64,
+        release_ms: f64,
+        #[serde(default)]
+        knee_db: f64,
+        #[serde(default)]
+        makeup_db: f64,
+    },
+}
+
+impl AudioUnit {
+    /// The unit's own id, used to correlate a change with its DSP.
+    pub fn id(&self) -> &str {
+        match self {
+            AudioUnit::ParametricEq { id, .. } | AudioUnit::Compressor { id, .. } => id,
+        }
+    }
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// A playback event delivered to plugins.

@@ -2604,6 +2604,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "poddies-plugin-compressor"
+version = "0.1.0"
+dependencies = [
+ "poddies-plugin-sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "poddies-plugin-eq"
+version = "0.1.0"
+dependencies = [
+ "poddies-plugin-sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "poddies-plugin-host"
 version = "0.1.0"
 dependencies = [

@@ -11,7 +11,7 @@ use poddies_core::fetch::{FeedClient, Fetched};
 use poddies_core::library::Library;
 use poddies_core::model::{Episode, Show};
 use poddies_core::util::title_case;
-use poddies_plugin_api::protocol::{methods, PlaybackEvent};
+use poddies_plugin_api::protocol::{methods, AudioUnit, PlaybackEvent, WidgetChange};
 use poddies_plugin_api::ui::PanelContent;
 use poddies_plugin_host::PluginHost;
 use serde::Serialize;
@@ -435,6 +435,7 @@ pub fn plugin_panels(state: State<'_, AppState>) -> Vec<PanelView> {
             plugin_id: entry.plugin_id,
             panel_id: entry.descriptor.id,
             title: entry.descriptor.title,
+            placement: entry.descriptor.placement,
         })
         .collect()
 }
@@ -450,6 +451,35 @@ pub fn plugin_panel_content(
         .panel_content(plugin_index, &panel_id)
         .map_err(|error| error.message)
 }
+
+/// Relay a control movement to the plugin that owns it.
+///
+/// Fire and forget: the plugin updates its state and the caller re-reads the
+/// panel. Kept as its own command so a drag never blocks on a reply.
+#[tauri::command]
+pub fn plugin_panel_change(
+    plugin_index: usize,
+    panel_id: String,
+    widget_id: String,
+    value: Value,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let change = WidgetChange {
+        panel_id,
+        widget_id,
+        value,
+    };
+    lock_plugins(&state)
+        .notify_change(plugin_index, &change)
+        .map_err(|error| error.message)
+}
+
+/// The audio units every enabled plugin wants in the playback chain.
+#[tauri::command]
+pub fn audio_graph(state: State<'_, AppState>) -> Vec<AudioUnit> {
+    lock_plugins(&state).audio_graph()
+}
+
 
 #[tauri::command]
 pub fn plugin_status(state: State<'_, AppState>) -> Vec<PluginStatusView> {

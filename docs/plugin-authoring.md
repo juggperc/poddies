@@ -70,6 +70,7 @@ Every plugin directory contains a `plugin.json`:
 | `ui-panel` | Contribute panels to the interface. |
 | `discovery-source` | Supply candidates to the Discovery queue. |
 | `playback-hook` | Receive playback lifecycle events. |
+| `audio-effects` | Place units in the playback audio chain. |
 | `library-read` | Call `host/library/shows` and `host/library/history`. |
 | `library-write` | Reserved; not granted to the reference plugins. |
 
@@ -227,7 +228,21 @@ log("info", "did a thing")
 
 Plugins never ship HTML, CSS or JavaScript. They return a list of widgets and
 the host renders them with the app's own typography, so every panel matches the
-rest of the interface and no plugin can inject markup.
+rest of the interface, works the same in the window and in a popout, and no
+plugin can inject markup.
+
+### Where a panel goes
+
+A descriptor's `placement` decides. It defaults to `sidebar`, so a plugin
+written earlier keeps working.
+
+```rust
+UiPanelDescriptor::sidebar("main", "My Stats")       // a section in the library
+UiPanelDescriptor::now_playing("dial", "Compressor") // docked under the speed control
+UiPanelDescriptor::popout("curve", "Parametric EQ")  // opened from the plugin manager
+```
+
+### Display widgets
 
 | Widget | JSON |
 |---|---|
@@ -238,6 +253,43 @@ rest of the interface and no plugin can inject markup.
 | Bar | `{"type":"bar","label":"Completion","value":0.8,"max":1.0}` |
 | List | `{"type":"list","items":[{"primary":"…","secondary":"…"}]}` |
 
+### Interactive widgets
+
+Give a control an `id`, and the host reports every movement with a `ui/change`
+notification. Answer the next `ui/panel` with the new state — that is the whole
+loop, and it is the same for a knob, a slider or an EQ curve.
+
+| Widget | JSON |
+|---|---|
+| Knob | `{"type":"knob","id":"amount","label":"Amount","value":0.35,"min":0,"max":1,"style":"vintage","readout":"2.4:1"}` |
+| Slider | `{"type":"slider","id":"trim","label":"Trim","value":-2,"min":-12,"max":12,"step":0.5,"unit":"dB"}` |
+| Toggle | `{"type":"toggle","id":"bypass","label":"Bypass","value":false}` |
+| EQ | `{"type":"eq","id":"curve","bands":[{"id":"low","label":"Low","frequency":90,"gain_db":0,"q":0.7,"kind":"low_shelf"}]}` |
+| Meter | `{"type":"meter","id":"gr","label":"Gain reduction","source":"gain_reduction","min_db":-18,"max_db":0}` |
+
+`knob.style` is `modern` or `vintage`. EQ bands are `peaking`, `low_shelf` or
+`high_shelf`; the host draws the true summed response of the bands you declare,
+using the same biquad coefficients the audio uses, so the curve never lies about
+the sound.
+
+`meter` is filled by the host from the live audio graph — the plugin does not
+report levels, which means a gain-reduction meter reads the compressor rather
+than the plugin's guess at it.
+
+Handling a change, in Rust:
+
+```rust
+fn on_notification(&mut self, method: &str, params: Value) {
+    if method != "ui/change" { return; }
+    let change: WidgetChange = serde_json::from_value(params).unwrap();
+    match change.widget_id.as_str() {
+        "amount" => self.amount = change.value.as_f64().unwrap_or(0.0),
+        "bypass" => self.enabled = !change.value.as_bool().unwrap_or(false),
+        _ => {}
+    }
+}
+```
+
 `ui/panel` receives `{"panel_id": "…"}` and returns:
 
 ```json
@@ -246,6 +298,34 @@ rest of the interface and no plugin can inject markup.
 
 A widget type the host does not recognise is skipped rather than rendered as
 garbage, so a plugin built against a newer minor protocol still loads.
+
+---
+
+## Processing audio
+
+Declare `audio-effects`, answer `audio/graph`, and your processing is in the
+playback chain. You supply **parameters**; the host builds the nodes on the audio
+thread. Nothing crosses the process boundary per sample, so latency is unchanged
+and Python is as viable as Rust.
+
+```json
+{ "units": [
+  { "type": "parametric_eq", "id": "eq", "enabled": true,
+    "bands": [ { "id": "low", "label": "Low", "frequency": 90, "gain_db": 2.0,
+                 "q": 0.7, "kind": "low_shelf" } ] },
+  { "type": "compressor", "id": "comp", "enabled": true,
+    "threshold_db": -18, "ratio": 4.0, "attack_ms": 8,
+    "release_ms": 400, "knee_db": 6, "makeup_db": 2 }
+] }
+```
+
+Units apply in order. The `id` is namespaced with your plugin id by the host, so
+it cannot collide with another plugin's.
+
+The mapping from your controls to DSP is yours to own — that is where a plugin's
+character lives. `poddies-plugin-compressor` is the short example: one `amount`
+knob drives threshold, ratio, attack, release and makeup through a single curve
+function, which is what makes it a one-knob compressor rather than five sliders.
 
 ---
 

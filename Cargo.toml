@@ -8,6 +8,8 @@ members = [
     "crates/poddies-cli",
     "plugins/poddies-plugin-stats",
     "plugins/poddies-plugin-apple-podcasts",
+    "plugins/poddies-plugin-eq",
+    "plugins/poddies-plugin-compressor",
     "app/src-tauri",
 ]
 
