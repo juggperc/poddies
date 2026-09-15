@@ -106,6 +106,8 @@
   --focus: rgba(255, 255, 255, 0.88);
   --bloom-tint: 255, 255, 255;
   --artwork-edge: rgba(255, 255, 255, 0.1);
+  /* A dialog is read, not glanced at, so it opts out of the see-through scrim. */
+  --surface-modal: rgba(26, 26, 27, 0.95);
 }
 
 @media (prefers-color-scheme: light) {
@@ -126,6 +128,7 @@
     --focus: rgba(0, 0, 0, 0.82);
     --bloom-tint: 255, 255, 255;
     --artwork-edge: rgba(0, 0, 0, 0.1);
+    --surface-modal: rgba(250, 250, 249, 0.96);
   }
 }
 
@@ -391,7 +394,37 @@ input {
   gap: 1px;
 }
 
+/* Rows pinned under the scroll region inherit the footer's inset, so their
+   highlight spans exactly the same width as the nav rows above. */
+.pane__footer {
+  padding: var(--step-2) var(--step-3) var(--step-3);
+  border-top: 1px solid var(--line);
+}
+
+.nav--footer {
+  padding: 0 0 var(--step-1);
+}
+
+/* The highlight wraps the row's buttons rather than living on one of them, so a
+   row can hold a second control without nesting buttons. */
+.nav__row {
+  position: relative;
+  display: flex;
+  border-radius: var(--radius);
+  transition: background var(--t-fast) var(--ease);
+}
+
+.nav__row:hover {
+  background: var(--surface-2);
+}
+
+.nav__row[data-current="true"] {
+  background: var(--surface-2);
+}
+
 .nav__item {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--step-3);
@@ -400,18 +433,63 @@ input {
   border-radius: var(--radius);
   color: var(--text-mid);
   text-align: left;
-  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+  transition: color var(--t-fast) var(--ease);
 }
 
-.nav__item:hover {
-  background: var(--surface-1);
+.nav__row:hover .nav__item,
+.nav__row[data-current="true"] .nav__item {
   color: var(--text-hi);
 }
 
-.nav__item[aria-current="true"] {
-  background: var(--surface-2);
-  color: var(--text-hi);
+.nav__row[data-current="true"] .nav__item {
   font-weight: 500;
+}
+
+/* The unsubscribe action and the episode count share one slot: hovering fades
+   the count out and the action in, so no row ever shifts. */
+.nav__action {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-lo);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--t-fast) var(--ease), background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+.nav__row:hover .nav__action,
+.nav__row:has(.nav__action:focus-visible) .nav__action {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.nav__row:hover .nav__meta,
+.nav__row:has(.nav__action:focus-visible) .nav__meta {
+  opacity: 0;
+}
+
+.nav__action:hover {
+  background: var(--surface-3);
+  color: var(--text-hi);
+}
+
+.nav__meta {
+  margin-left: auto;
+  padding-right: 2px;
+  font-size: 11px;
+  color: var(--text-lo);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  transition: opacity var(--t-fast) var(--ease);
 }
 
 .nav__thumb {
@@ -442,12 +520,15 @@ input {
   font-size: 13px;
 }
 
-.nav__meta {
-  margin-left: auto;
-  font-size: 11px;
+.nav__item--action {
+  width: 100%;
   color: var(--text-lo);
-  font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
+  padding: 0 var(--step-3);
+}
+
+.nav__item--action:hover {
+  background: var(--surface-2);
+  color: var(--text-hi);
 }
 
 .status-dot {
@@ -752,21 +833,6 @@ input {
 /* --------------------------------------------------------------------------
    7. Discovery
    -------------------------------------------------------------------------- */
-/* A quiet pointer to the ranking controls, which live in Settings. */
-.discovery__tune {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--step-3);
-  margin: 0 var(--step-5) var(--step-4);
-  padding: 0 var(--step-1) 0 0;
-}
-
-.discovery__tune-text {
-  font-size: 11.5px;
-  color: var(--text-lo);
-}
-
 .link-btn {
   font-size: 11.5px;
   color: var(--text-mid);
@@ -1290,55 +1356,131 @@ input {
   transform: scale(0.92);
 }
 
-.add-form {
-  display: flex;
-  gap: var(--step-2);
-  padding: var(--step-3);
-  border-top: 1px solid var(--line);
+/* --------------------------------------------------------------------------
+   10c. The add-feed dialog
+   A native <dialog>, so the focus trap, backdrop and Escape come from the
+   browser. Only the surface is ours.
+   -------------------------------------------------------------------------- */
+.modal {
+  /* Not `inset: 0`: the dialog is sized to its content and centred. */
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-modal);
+  backdrop-filter: blur(30px) saturate(120%);
+  color: var(--text-hi);
+  width: min(420px, calc(100vw - 48px));
+  overflow: hidden;
 }
 
-.add-form input[type="text"] {
-  flex: 1;
-  min-width: 0;
-  height: 34px;
+.modal::backdrop {
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.modal::backdrop {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.modal__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--step-3);
+  padding: var(--step-5);
+}
+
+.modal__title {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.modal__hint {
+  margin: calc(var(--step-3) * -1) 0 0;
+  font-size: 11.5px;
+  color: var(--text-lo);
+}
+
+.modal__input {
+  height: 36px;
   padding: 0 var(--step-3);
   border-radius: var(--radius);
   border: 1px solid var(--line-strong);
   background: var(--surface-1);
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text-hi);
   transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
 }
 
-.add-form input[type="text"]::placeholder {
+.modal__input::placeholder {
   color: var(--text-lo);
 }
 
-.add-form input[type="text"]:focus {
+.modal__input:focus {
   outline: none;
   border-color: var(--text-lo);
   background: var(--surface-2);
 }
 
-.add-form button {
+/* Reserved so the dialog does not jump when a message appears. */
+.modal__error:empty {
+  display: none;
+}
+
+.modal__error {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-mid);
+}
+
+.modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--step-2);
+  margin-top: var(--step-1);
+}
+
+.modal__cancel,
+.modal__submit {
   height: 34px;
   padding: 0 var(--step-4);
   border-radius: var(--radius);
-  background: var(--surface-2);
-  border: 1px solid var(--line-strong);
-  color: var(--text-hi);
   font-size: 12.5px;
   font-weight: 500;
-  transition: background var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
 }
 
-.add-form button:hover {
+.modal__cancel {
+  color: var(--text-mid);
+}
+
+.modal__cancel:hover {
+  background: var(--surface-2);
+  color: var(--text-hi);
+}
+
+.modal__submit {
   background: var(--surface-3);
+  border: 1px solid var(--line-strong);
+  color: var(--text-hi);
 }
 
-.add-form button:active {
+.modal__submit:hover {
+  background: var(--text-hi);
+  color: var(--scrim);
+}
+
+.modal__submit:active,
+.modal__cancel:active {
   transform: scale(0.97);
 }
 
-.add-form button[disabled] {
+.modal__submit[disabled] {
   opacity: 0.5;
 }
 

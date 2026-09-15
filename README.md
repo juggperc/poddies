@@ -34,7 +34,8 @@ soft **bloom** opening animation.
 
 - **Subscriptions** — RSS 2.0, Atom, RSS 1.0 and JSON Feed all parse, with
   conditional refreshes (`If-None-Match` / `If-Modified-Since`) so checking for
-  new episodes costs nothing when nothing changed.
+  new episodes costs nothing when nothing changed. Add a feed from the dialog in
+  the sidebar, and drop one from the same row on hover.
 - **Search** — your whole library, plus [Apple Podcasts](https://itunes.apple.com/search)
   over its public, unauthenticated endpoint, so a query finds shows you have not
   subscribed to yet. Add one in a click.

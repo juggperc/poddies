@@ -213,6 +213,7 @@ const dom = {
   app: document.getElementById("app") as HTMLElement,
   library: document.getElementById("pane-library") as HTMLElement,
   libraryScroll: document.getElementById("library-scroll") as HTMLElement,
+  libraryFooterNav: document.getElementById("library-footer-nav") as HTMLElement,
   middle: document.getElementById("pane-middle") as HTMLElement,
   now: document.getElementById("pane-now") as HTMLElement,
   titlebar: document.querySelector(".titlebar") as HTMLElement,
@@ -223,7 +224,13 @@ const dom = {
   close: document.getElementById("btn-close") as HTMLButtonElement,
   search: document.getElementById("library-search") as HTMLInputElement,
   searchClear: document.getElementById("library-search-clear") as HTMLButtonElement,
-  addForm: null as HTMLElement | null,
+  addFeedOpen: document.getElementById("add-feed-open") as HTMLButtonElement,
+  addFeedDialog: document.getElementById("add-feed") as HTMLDialogElement,
+  addFeedForm: document.getElementById("add-feed-form") as HTMLFormElement,
+  addFeedInput: document.getElementById("add-feed-input") as HTMLInputElement,
+  addFeedError: document.getElementById("add-feed-error") as HTMLElement,
+  addFeedSubmit: document.getElementById("add-feed-submit") as HTMLButtonElement,
+  addFeedCancel: document.getElementById("add-feed-cancel") as HTMLButtonElement,
 };
 
 function installSearchField(): void {
@@ -483,9 +490,8 @@ function renderLibrary(): void {
   }
 
   // While searching, the subscription list doubles as a jump list of matches.
-  const subscriptions = (
-    state.query ? state.search.shows : state.library.shows
-  ).map((show) =>
+  const searching = state.query !== "";
+  const subscriptions = (searching ? state.search.shows : state.library.shows).map((show) =>
     navItem(
       `show:${show.id}`,
       null,
@@ -493,6 +499,13 @@ function renderLibrary(): void {
       String(show.episode_count),
       () => setRoute({ kind: "show", showId: show.id }),
       artwork(show.image_url, "nav__thumb"),
+      // Unsubscribing is meaningless for a search hit that is not subscribed.
+      searching
+        ? undefined
+        : {
+            label: `Unsubscribe from ${show.title}`,
+            onActivate: () => void unsubscribe(show.id, show.title),
+          },
     ),
   );
 
@@ -532,21 +545,31 @@ function renderLibrary(): void {
   } else {
     scroll.push(
       el("div", { class: "empty" }, [
-        el("p", { class: "empty__body", text: "Add a feed address below to start your library." }),
+        el("p", { class: "empty__body", text: "Nothing subscribed yet. Add a feed to begin." }),
       ]),
     );
   }
 
-  scroll.push(
-    el("div", { class: "hairline" }),
+  // Settings is pinned in the footer with "Add a feed", so it is always in reach
+  // however long the subscription list grows — and its highlight lines up with
+  // the nav rows above.
+  dom.libraryFooterNav.replaceChildren(
     navItem("settings", GLYPH.settings, "Settings", "", () => setRoute({ kind: "settings" })),
   );
 
-  // The search field and the add form live outside this scroll region, so a
+  // The search field and the footer live outside this scroll region, so a
   // rebuild never touches a focused input.
   dom.libraryScroll.replaceChildren(...scroll);
 }
 
+/**
+ * A navigation row.
+ *
+ * The highlight lives on the wrapper rather than the button, so a row can carry
+ * a second control — the unsubscribe action on a subscription — without nesting
+ * one button inside another. The optional `action` crossfades with `meta` in
+ * the same slot, so the row's geometry never moves on hover.
+ */
 function navItem(
   key: string,
   glyph: string | null,
@@ -554,25 +577,35 @@ function navItem(
   meta: string,
   onActivate: () => void,
   art?: HTMLElement,
+  action?: { label: string; onActivate: () => void },
 ): HTMLElement {
-  const active = routeKey() === key;
-  const node = el(
+  const current = routeKey() === key;
+
+  const main = el(
     "button",
     {
       class: "nav__item",
-      attrs: { type: "button", "aria-current": active ? "true" : "false" },
+      attrs: { type: "button", "aria-current": current ? "true" : "false" },
       on: { click: onActivate },
     },
     [
-      art ??
-        el("span", { class: "nav__glyph" }, [
-          glyph ? svg(glyph, 15) : el("span"),
-        ]),
+      art ?? el("span", { class: "nav__glyph" }, [glyph ? svg(glyph, 15) : el("span")]),
       el("span", { class: "nav__label", text: label }),
       meta ? el("span", { class: "nav__meta", text: meta }) : null,
     ],
   );
-  return node;
+
+  return el("div", { class: "nav__row", attrs: { "data-current": String(current) } }, [
+    main,
+    action
+      ? el("button", {
+          class: "nav__action",
+          attrs: { type: "button", "aria-label": action.label, title: action.label },
+          text: "\u00d7",
+          on: { click: action.onActivate },
+        })
+      : null,
+  ]);
 }
 
 function routeKey(): string {
@@ -602,43 +635,76 @@ function findPanel(pluginIndex: number, panelId: string): PanelView | undefined 
   );
 }
 
-function addForm(): HTMLElement {
-  const input = el("input", {
-    attrs: { type: "text", placeholder: "Feed address", spellcheck: "false" },
-  }) as HTMLInputElement;
+/** Drop a subscription, keeping its episodes in the library. */
+async function unsubscribe(showId: string, title: string): Promise<void> {
+  try {
+    state.library = await api.unsubscribe(showId);
+    if (state.route.kind === "show" && state.route.showId === showId) {
+      state.episodes = [];
+      state.route = { kind: "latest" };
+    }
+    render();
+    showStatus(`Unsubscribed from ${title}`);
+  } catch (error) {
+    showStatus(String(error));
+  }
+}
 
-  const submit = el("button", { attrs: { type: "submit" }, text: "Add" }) as HTMLButtonElement;
+/**
+ * The add-feed dialog. It is a native `<dialog>`, so the browser gives us the
+ * focus trap, the backdrop and Escape-to-dismiss for free; all this wires the
+ * form's own lifecycle.
+ */
+function installAddFeedDialog(): void {
+  const { addFeedDialog: dialog, addFeedInput: input, addFeedError: error } = dom;
 
-  const form = el(
-    "form",
-    {
-      class: "add-form",
-      on: {
-        submit: async (event) => {
-          event.preventDefault();
-          const url = input.value.trim();
-          if (!url) return;
-          submit.disabled = true;
-          submit.textContent = "Adding";
-          try {
-            const show = await api.subscribe(url);
-            input.value = "";
-            await reload();
-            setRoute({ kind: "show", showId: show.id });
-            showStatus(`Added ${show.title}`);
-          } catch (error) {
-            showStatus(String(error));
-          } finally {
-            submit.disabled = false;
-            submit.textContent = "Add";
-          }
-        },
-      },
-    },
-    [input, submit],
-  );
+  dom.addFeedOpen.addEventListener("click", () => {
+    error.textContent = "";
+    input.value = "";
+    dialog.showModal();
+    input.focus();
+  });
 
-  return form;
+  dom.addFeedCancel.addEventListener("click", () => dialog.close());
+
+  // Clicking the backdrop closes: the dialog element itself is the whole
+  // scrollable box, so a click landing on it is a click outside the form.
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) dialog.close();
+  });
+
+  dom.addFeedForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const url = input.value.trim();
+    if (!url) {
+      error.textContent = "Enter a feed address.";
+      input.focus();
+      return;
+    }
+
+    const submit = dom.addFeedSubmit;
+    submit.disabled = true;
+    submit.textContent = "Adding";
+    error.textContent = "";
+
+    try {
+      const show = await api.subscribe(url);
+      dialog.close();
+      await reload();
+      state.episodeCache.delete(show.id);
+      setRoute({ kind: "show", showId: show.id });
+      showStatus(`Added ${show.title}`);
+    } catch (failure) {
+      // Show the reason in place, so the address can be corrected without
+      // losing the dialog.
+      error.textContent = String(failure);
+      input.focus();
+      input.select();
+    } finally {
+      submit.disabled = false;
+      submit.textContent = "Add";
+    }
+  });
 }
 
 function renderMiddle(): void {
@@ -828,21 +894,6 @@ function showRow(show: LibraryView["shows"][number]): HTMLElement {
 }
 
 function discoveryView(): HTMLElement {
-  // Ranking lives in Settings so the queue itself stays clean; the link keeps
-  // the connection between the two a single click away.
-  const tune = el("div", { class: "discovery__tune" }, [
-    el("span", {
-      class: "discovery__tune-text",
-      text: "Ranked from your listening, adjusted in Settings",
-    }),
-    el("button", {
-      class: "link-btn",
-      attrs: { type: "button" },
-      text: "Tune",
-      on: { click: () => void setRoute({ kind: "settings" }) },
-    }),
-  ]);
-
   const body = state.discoveryLoading && state.discovery.length === 0
     ? el("div", { class: "empty" }, [el("p", { class: "empty__body", text: "Looking for shows…" })])
     : state.discovery.length === 0
@@ -857,7 +908,6 @@ function discoveryView(): HTMLElement {
 
   return el("div", {}, [
     header("Discovery", String(state.discovery.length), state.discovery.length > 0),
-    tune,
     body,
   ]);
 }
@@ -1349,11 +1399,7 @@ async function boot(): Promise<void> {
   installAudioHandlers();
   installSearchField();
   installWindowDragging();
-
-  // The add-feed form is created once and kept: its input must not reset on a
-  // library re-render.
-  dom.addForm = addForm();
-  dom.library.appendChild(dom.addForm);
+  installAddFeedDialog();
 
   dom.minimize.addEventListener("click", () => void api.appHide());
   dom.close.addEventListener("click", () => void api.appHide());

@@ -51,13 +51,43 @@
               <button id="library-search-clear" class="searchbox__clear" type="button" aria-label="Clear search">&#215;</button>
             </div>
             <div id="library-scroll" class="pane__scroll"></div>
-            <!-- The add-feed form is appended here once at startup. -->
+            <div class="pane__footer">
+              <div id="library-footer-nav" class="nav nav--footer"></div>
+              <button id="add-feed-open" class="nav__item nav__item--action" type="button">
+                <span class="nav__glyph" aria-hidden="true">
+                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+                    <path d="M8 3.4v9.2M3.4 8h9.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+                  </svg>
+                </span>
+                <span class="nav__label">Add a feed</span>
+              </button>
+            </div>
           </nav>
           <section id="pane-middle" class="pane pane--middle" aria-label="Content"></section>
           <aside id="pane-now" class="pane pane--now" aria-label="Now playing"></aside>
         </main>
       </div>
     </div>
+
+    <dialog id="add-feed" class="modal" aria-labelledby="add-feed-title">
+      <form id="add-feed-form" class="modal__form">
+        <h2 id="add-feed-title" class="modal__title">Add a feed</h2>
+        <p class="modal__hint">RSS, Atom or JSON Feed.</p>
+        <input
+          id="add-feed-input"
+          class="modal__input"
+          type="text"
+          placeholder="Feed address"
+          spellcheck="false"
+          autocomplete="off"
+        />
+        <p id="add-feed-error" class="modal__error" role="alert"></p>
+        <div class="modal__actions">
+          <button id="add-feed-cancel" class="modal__cancel" type="button">Cancel</button>
+          <button id="add-feed-submit" class="modal__submit" type="submit">Add</button>
+        </div>
+      </form>
+    </dialog>
 
     <script type="module" src="/src/main.ts"></script>
   </body>
