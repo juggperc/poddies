@@ -2551,10 +2551,12 @@ dependencies = [
 name = "poddies"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "chrono",
  "poddies-core",
  "poddies-plugin-api",
  "poddies-plugin-host",
+ "reqwest",
  "serde",
  "serde_json",
  "tauri",

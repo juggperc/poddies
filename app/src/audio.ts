@@ -7,15 +7,31 @@
  * process boundary per sample, so a plugin written in Python is just as viable
  * as one written in Rust.
  *
- * The pristine path matters: if no plugin asks for audio, the `<audio>` element
- * is never touched and plays directly. Once a graph has been built the element
- * is permanently routed through it (a `MediaElementSource` cannot be undone),
- * so the chain is always left connected to the destination.
+ * The pristine path matters. Routing an `<audio>` element through Web Audio is
+ * a one-way door (`MediaElementSource` cannot be undone) and a rerouted element
+ * is subject to stricter browser rules than a plain one — a context that is
+ * suspended, and cross-origin media without CORS headers, both come out as
+ * silence. So the element is only ever rerouted when a plugin has a unit with
+ * `enabled: true`; disabled-only graphs and empty graphs leave it untouched.
+ * Once rerouted the chain always stays connected to the destination.
  */
 
 import type { AudioUnit } from "./api";
 
 const FFT_SIZE = 1024;
+
+/** Anything outside these ranges is clamped, not trusted. */
+const LIMITS = {
+  eqFrequency: { min: 20, max: 20_000 },
+  eqQuality: { min: 0.05, max: 20 },
+  eqGain: { min: -30, max: 30 },
+  threshold: { min: -100, max: 0 },
+  ratio: { min: 1, max: 20 },
+  attack: { min: 0, max: 1 },
+  release: { min: 0, max: 1 },
+  knee: { min: 0, max: 40 },
+  makeup: { min: -24, max: 24 },
+} as const;
 
 let context: AudioContext | null = null;
 let head: GainNode | null = null;
@@ -24,17 +40,14 @@ let chain: AudioNode[] = [];
 let compressor: DynamicsCompressorNode | null = null;
 let scratch: Float32Array<ArrayBuffer> | null = null;
 let live = false;
-
-/** True once the element is routed through the graph. */
-export function isRouted(): boolean {
-  return live;
-}
+let running = false;
+let lastShape: string | null = null;
 
 /**
  * Route the element through the graph. Safe to call repeatedly; only the first
- * call does anything.
+ * call does anything. Deliberately the only place a context is created.
  */
-export function attach(element: HTMLAudioElement): void {
+function attach(element: HTMLAudioElement): void {
   if (live) return;
 
   try {
@@ -60,23 +73,60 @@ export function attach(element: HTMLAudioElement): void {
   }
 }
 
-/** Browsers start the context suspended until a gesture; call this on play. */
-export async function resume(): Promise<void> {
-  if (context?.state === "suspended") {
+/** Whether the element is currently routed through the graph. When it is, the
+ * element's bytes must be same-origin — routed cross-origin media is silenced
+ * by the browser, which is why playback URLs go through the media proxy. */
+export function isRouted(): boolean {
+  return live;
+}
+
+/** Browsers start the context suspended until a gesture; call this on play.
+ * Returns whether the graph is usable for audio, so callers can surface a
+ * problem instead of leaving the element silent inside a dead context. */
+export async function resume(): Promise<boolean> {
+  if (!context) return false;
+  if (context.state !== "running") {
     try {
       await context.resume();
     } catch {
-      /* the element still plays through the graph in most cases */
+      /* fall through to the state report below */
     }
   }
+  running = context.state === "running";
+  if (!running) {
+    console.warn("[poddies] audio graph still", context.state);
+  }
+  return running;
 }
 
-/** Rebuild the chain from a plugin-supplied unit list. */
-export function apply(units: AudioUnit[]): void {
-  if (!context || !head || !analyser) return;
+/** A signature of the unit list — identical signatures skip the rebuild. */
+function shapeOf(units: AudioUnit[]): string {
+  return JSON.stringify(
+    units.map((unit) => ({
+      type: unit.type,
+      enabled: unit.enabled,
+      // Ordered keys, so a reordered band is a different shape (order matters).
+      bands: unit.type === "parametric_eq" ? unit.bands : undefined,
+      threshold_db: unit.type === "compressor" ? [unit.threshold_db, unit.ratio, unit.attack_ms, unit.release_ms, unit.knee_db, unit.makeup_db] : undefined,
+    })),
+  );
+}
 
-  const wanted = units.filter((unit) => unit.enabled !== false);
-  if (wanted.length === 0 && chain.length === 0) return;
+/**
+ * Bring the pipeline in line with what the plugins want. One call: routes the
+ * element only if an enabled unit asks for it, rebuilds the chain, and does
+ * nothing when the request is unchanged.
+ */
+export function refresh(element: HTMLAudioElement, units: AudioUnit[]): void {
+  const enabled = units.filter((unit) => unit.enabled !== false);
+  if (enabled.length > 0) attach(element);
+
+  const shape = shapeOf(enabled);
+  if (!live || !context || !head || !analyser) return;
+  // An unchanged graph between panel change round-trips is skipped entirely:
+  // rebuilding mid-stream makes clicks for no audible difference.
+  if (shape === lastShape && (enabled.length > 0 || chain.length === 0)) return;
+  lastShape = shape;
 
   for (const node of chain) {
     try {
@@ -89,46 +139,63 @@ export function apply(units: AudioUnit[]): void {
   compressor = null;
   head.disconnect();
 
+  // The chain always ends connected, whatever happens below: a failing unit
+  // costs its own effects, never the route to the speakers.
   let tail: AudioNode = head;
+  const reconnect = () => {
+    tail.connect(analyser!);
+  };
 
-  for (const unit of wanted) {
-    if (unit.type === "parametric_eq") {
-      for (const band of unit.bands) {
-        const filter = context.createBiquadFilter();
-        filter.type =
-          band.kind === "low_shelf"
-            ? "lowshelf"
-            : band.kind === "high_shelf"
-              ? "highshelf"
-              : "peaking";
-        filter.frequency.value = clamp(band.frequency, 20, 20_000);
-        filter.Q.value = clamp(band.q, 0.05, 20);
-        filter.gain.value = clamp(band.gain_db, -30, 30);
-        tail.connect(filter);
-        chain.push(filter);
-        tail = filter;
-      }
-    } else if (unit.type === "compressor") {
-      const dynamics = context.createDynamicsCompressor();
-      dynamics.threshold.value = clamp(unit.threshold_db, -100, 0);
-      dynamics.ratio.value = clamp(unit.ratio, 1, 20);
-      dynamics.attack.value = clamp(unit.attack_ms / 1000, 0, 1);
-      dynamics.release.value = clamp(unit.release_ms / 1000, 0, 1);
-      dynamics.knee.value = clamp(unit.knee_db ?? 0, 0, 40);
-
-      const makeup = context.createGain();
-      makeup.gain.value = dbToGain(clamp(unit.makeup_db ?? 0, -24, 24));
-
-      tail.connect(dynamics);
-      chain.push(dynamics);
-      dynamics.connect(makeup);
-      chain.push(makeup);
-      tail = makeup;
-      compressor = dynamics;
+  for (const unit of enabled) {
+    try {
+      if (unit.type === "parametric_eq") tail = buildEq(tail, unit);
+      else if (unit.type === "compressor") tail = buildCompressor(tail, unit);
+    } catch (error) {
+      console.error("[poddies] audio unit refused:", unit.type, error);
     }
   }
+  reconnect();
+}
 
-  tail.connect(analyser);
+function buildEq(tail: AudioNode, unit: Extract<AudioUnit, { type: "parametric_eq" }>): AudioNode {
+  for (const band of unit.bands) {
+    const filter = context!.createBiquadFilter();
+    filter.type =
+      band.kind === "low_shelf"
+        ? "lowshelf"
+        : band.kind === "high_shelf"
+          ? "highshelf"
+          : "peaking";
+    filter.frequency.value = clamp(band.frequency, LIMITS.eqFrequency);
+    filter.Q.value = clamp(band.q, LIMITS.eqQuality);
+    filter.gain.value = clamp(band.gain_db, LIMITS.eqGain);
+    tail.connect(filter);
+    chain.push(filter);
+    tail = filter;
+  }
+  return tail;
+}
+
+function buildCompressor(
+  tail: AudioNode,
+  unit: Extract<AudioUnit, { type: "compressor" }>,
+): AudioNode {
+  const dynamics = context!.createDynamicsCompressor();
+  dynamics.threshold.value = clamp(unit.threshold_db, LIMITS.threshold);
+  dynamics.ratio.value = clamp(unit.ratio, LIMITS.ratio);
+  dynamics.attack.value = clamp(unit.attack_ms / 1000, LIMITS.attack);
+  dynamics.release.value = clamp(unit.release_ms / 1000, LIMITS.release);
+  dynamics.knee.value = clamp(unit.knee_db ?? 0, LIMITS.knee);
+
+  const makeup = context!.createGain();
+  makeup.gain.value = dbToGain(clamp(unit.makeup_db ?? 0, LIMITS.makeup));
+
+  tail.connect(dynamics);
+  chain.push(dynamics);
+  dynamics.connect(makeup);
+  chain.push(makeup);
+  compressor = dynamics;
+  return makeup;
 }
 
 export interface Meters {
@@ -140,7 +207,7 @@ export interface Meters {
 
 /** Read the current levels. Cheap enough to call on a timer. */
 export function readMeters(): Meters {
-  if (!analyser || !scratch) return { peakDb: -Infinity, reductionDb: 0 };
+  if (!running || !analyser || !scratch) return { peakDb: -Infinity, reductionDb: 0 };
 
   analyser.getFloatTimeDomainData(scratch);
   let peak = 0;
@@ -155,9 +222,9 @@ export function readMeters(): Meters {
   };
 }
 
-function clamp(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) return min;
-  return Math.min(max, Math.max(min, value));
+function clamp(value: number, range: { min: number; max: number }): number {
+  if (!Number.isFinite(value)) return range.min;
+  return Math.min(range.max, Math.max(range.min, value));
 }
 
 function dbToGain(db: number): number {

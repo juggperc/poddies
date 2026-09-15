@@ -8,15 +8,44 @@
  * popout, without the plugin shipping any markup.
  */
 
-import type { EqBand, Widget } from "./api";
+import type { EqBand, PanelContent, Widget } from "./api";
 
 export interface WidgetHost {
   onChange(widgetId: string, value: unknown): void;
 }
 
+/**
+ * Live interaction tracking.
+ *
+ * A widget mid-drag is a gesture bound to a specific DOM node; replacing that
+ * node — with a rebuilt panel whose values "just changed" — kills the drag, so
+ * the renderer must defer any rebuild until the gesture ends. Knobs and EQ
+ * nodes drag through window listeners; sliders and toggles are native inputs
+ * whose gestures are broken the same way by removal. Every control here marks
+ * the window while it is held.
+ */
+let interactions = 0;
+export function isInteracting(): boolean {
+  return interactions > 0;
+}
+export function beginInteraction(): void {
+  interactions += 1;
+}
+export function endInteraction(): void {
+  interactions = Math.max(0, interactions - 1);
+}
+
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 export function renderWidget(widget: Widget, host: WidgetHost): HTMLElement | null {
+  const root = buildWidget(widget, host);
+  if (!root) return null;
+  root.dataset.widgetId = (widget as { id?: string }).id ?? "";
+  root.dataset.widgetType = widget.type;
+  return root;
+}
+
+function buildWidget(widget: Widget, host: WidgetHost): HTMLElement | null {
   switch (widget.type) {
     case "heading":
       return element("div", "widget__heading", widget.text);
@@ -148,6 +177,18 @@ function slider(widget: Extract<Widget, { type: "slider" }>, host: WidgetHost): 
     output.textContent = format(value, widget.unit);
     host.onChange(widget.id, value);
   });
+  // A native range drag runs from pointerdown to pointerup on the input; a
+  // panel rebuild in between would remove it mid-gesture.
+  input.addEventListener("pointerdown", () => {
+    beginInteraction();
+    window.addEventListener(
+      "pointerup",
+      () => {
+        endInteraction();
+      },
+      { once: true },
+    );
+  });
 
   return element("div", "slider", [
     element("span", "slider__label", widget.label),
@@ -162,13 +203,45 @@ function slider(widget: Extract<Widget, { type: "slider" }>, host: WidgetHost): 
  * A rotary control. Vertical drag turns it; hold shift for fine movement.
  * `vintage` draws the heavier face — knurled rim, ivory pointer, tick marks.
  */
+/**
+ * knob geometry, shared by the builder and the patcher so both agree on the
+ * drawing. Vertical drag turns the knob; shift for fine movement.
+ */
+const KNOB_SWEEP = 270;
+const KNOB_START = -135;
+
+function knobSize(vintage: boolean): number {
+  return vintage ? 96 : 72;
+}
+
+function knobPointOn(vintage: boolean, ratio: number, distance: number): {
+  x: number;
+  y: number;
+} {
+  const size = knobSize(vintage);
+  const centre = size / 2;
+  const radians = ((KNOB_START + KNOB_SWEEP * ratio - 90) * Math.PI) / 180;
+  return {
+    x: centre + Math.cos(radians) * distance,
+    y: centre + Math.sin(radians) * distance,
+  };
+}
+
+function knobArcPath(vintage: boolean, from: number, to: number, distance: number): string {
+  const a = knobPointOn(vintage, from, distance);
+  const b = knobPointOn(vintage, to, distance);
+  const large = Math.abs(to - from) * KNOB_SWEEP > 180 ? 1 : 0;
+  return `M ${a.x} ${a.y} A ${distance} ${distance} 0 ${large} 1 ${b.x} ${b.y}`;
+}
+
 function knob(widget: Extract<Widget, { type: "knob" }>, host: WidgetHost): HTMLElement {
   const vintage = widget.style === "vintage";
-  const size = vintage ? 96 : 72;
+  const size = knobSize(vintage);
   const radius = size / 2 - 6;
   const centre = size / 2;
-  const sweep = 270;
-  const start = -135;
+  const pointOn = (ratio: number, distance: number) => knobPointOn(vintage, ratio, distance);
+  const arcPath = (from: number, to: number, distance: number) =>
+    knobArcPath(vintage, from, to, distance);
 
   const root = svg("svg", {
     class: `knob knob--${vintage ? "vintage" : "modern"}`,
@@ -181,20 +254,6 @@ function knob(widget: Extract<Widget, { type: "knob" }>, host: WidgetHost): HTML
   });
 
   const position = () => normalise(widget.value, widget.min, widget.max);
-  const angleFor = (ratio: number) => start + sweep * ratio;
-  const pointOn = (ratio: number, distance: number) => {
-    const radians = ((angleFor(ratio) - 90) * Math.PI) / 180;
-    return {
-      x: centre + Math.cos(radians) * distance,
-      y: centre + Math.sin(radians) * distance,
-    };
-  };
-  const arcPath = (from: number, to: number, distance: number) => {
-    const a = pointOn(from, distance);
-    const b = pointOn(to, distance);
-    const large = Math.abs(to - from) * sweep > 180 ? 1 : 0;
-    return `M ${a.x} ${a.y} A ${distance} ${distance} 0 ${large} 1 ${b.x} ${b.y}`;
-  };
 
   // Track, then the filled portion up to the current value.
   root.append(
@@ -291,6 +350,7 @@ function knob(widget: Extract<Widget, { type: "knob" }>, host: WidgetHost): HTML
 
   const onUp = () => {
     dragging = false;
+    endInteraction();
     root.classList.remove("is-dragging");
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onUp);
@@ -300,6 +360,12 @@ function knob(widget: Extract<Widget, { type: "knob" }>, host: WidgetHost): HTML
     const pointer = event as PointerEvent;
     pointer.preventDefault();
     dragging = true;
+    // A drag starts from the value currently on display, not the value from
+    // when this node was built — an external update (another panel, a fresh
+    // plugin reply) may have moved it since.
+    const onDisplay = Number(root.getAttribute("aria-valuenow"));
+    if (Number.isFinite(onDisplay)) current = onDisplay;
+    beginInteraction();
     startY = pointer.clientY;
     startValue = current;
     root.classList.add("is-dragging");
@@ -440,6 +506,7 @@ function eqCurve(widget: Extract<Widget, { type: "eq" }>, host: WidgetHost): HTM
 
     const onUp = () => {
       dragging = false;
+      endInteraction();
       node.classList.remove("is-dragging");
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
@@ -448,6 +515,7 @@ function eqCurve(widget: Extract<Widget, { type: "eq" }>, host: WidgetHost): HTM
     node.addEventListener("pointerdown", (event) => {
       (event as PointerEvent).preventDefault();
       dragging = true;
+      beginInteraction();
       node.classList.add("is-dragging");
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
@@ -586,16 +654,176 @@ export function paintMeters(root: ParentNode, peakDb: number, reductionDb: numbe
 
     const fill = node.querySelector<HTMLElement>(".meter__fill");
     const readout = node.querySelector<HTMLElement>(".meter__readout");
-    if (fill) fill.style.width = `${(ratio * 100).toFixed(1)}%`;
+    // Write only on change: these run every tick while anything plays, and an
+    // unguarded write forces style recalculation on the whole subtree.
+    const nextWidth = `${(ratio * 100).toFixed(1)}%`;
+    if (fill && fill.style.width !== nextWidth) fill.style.width = nextWidth;
     if (readout) {
-      if (!Number.isFinite(value)) {
-        readout.textContent = "—";
-      } else {
+      let nextLabel = "—";
+      if (Number.isFinite(value)) {
         // A reading of nothing should read as 0.0, not -0.0.
         const shown = Math.abs(value) < 0.05 ? 0 : value;
-        readout.textContent = `${shown > 0 ? "+" : ""}${shown.toFixed(1)} dB`;
+        nextLabel = `${shown > 0 ? "+" : ""}${shown.toFixed(1)} dB`;
       }
+      if (readout.textContent !== nextLabel) readout.textContent = nextLabel;
     }
     node.classList.toggle("meter--hot", Number.isFinite(value) && value > -3);
   }
+}
+
+/* ------------------------------------------------------------------ patching */
+
+export type PanelPatch = "patched" | "mismatch";
+
+/**
+ * Refresh the widgets already mounted in `container` from fresh plugin content,
+ * without rebuilding the container.
+ *
+ * This is how a plugin control updates without the page flashing: the knob you
+ * turned, the slider you moved, stay exactly where the pointer left them and
+ * only their display is pulled to the new value. Returns `"mismatch"` when the
+ * widget list changed shape beyond a display refresh (different type at some
+ * slot, different min/max geometry, a differently-ordered EQ) so the caller can
+ * rebuild that panel properly.
+ */
+export function patchWidgets(
+  container: HTMLElement,
+  content: PanelContent,
+  host: WidgetHost,
+): PanelPatch {
+  // A drag holds a gesture on a specific node; a structurally-different
+  // answer must not be forced under it. The caller rebuilds it later.
+  if (isInteracting()) return "mismatch";
+
+  const current = [...container.children].filter(
+    (node): node is HTMLElement =>
+      node instanceof HTMLElement && node.dataset.widgetType !== undefined,
+  );
+  const incoming = content.widgets;
+  const paired = Math.min(current.length, incoming.length);
+
+  for (let index = 0; index < paired; index += 1) {
+    if (current[index].dataset.widgetType !== incoming[index].type) {
+      return "mismatch";
+    }
+    if (!updateWidgetDisplay(current[index], incoming[index])) {
+      return "mismatch";
+    }
+  }
+
+  for (let index = current.length - 1; index >= incoming.length; index -= 1) {
+    current[index].remove();
+  }
+  for (let index = paired; index < incoming.length; index += 1) {
+    const node = renderWidget(incoming[index], host);
+    if (node) container.append(node);
+  }
+  return "patched";
+}
+
+/** Pull one mounted widget's display to the incoming widget. `false` = cannot
+ * be patched in place (geometry changed); the caller rebuilds the panel. */
+function updateWidgetDisplay(root: HTMLElement, widget: Widget): boolean {
+  switch (widget.type) {
+    case "heading":
+    case "text":
+      if (root.textContent !== widget.text) root.textContent = widget.text;
+      return true;
+    case "divider":
+      return true;
+    case "metric": {
+      const [value, label] = [...root.children] as [HTMLElement, HTMLElement];
+      setIfChanged(value, widget.value);
+      setIfChanged(label, widget.label);
+      return true;
+    }
+    case "bar": {
+      const head = root.querySelector<HTMLElement>(".bar__head");
+      if (!head) return false;
+      setIfChanged(head.children[0] as HTMLElement | undefined, widget.label);
+      const ratio = widget.max > 0 ? clamp(widget.value / widget.max, 0, 1) : 0;
+      setIfChanged(head.children[1] as HTMLElement | undefined, `${Math.round(ratio * 100)}%`);
+      const fill = root.querySelector<HTMLElement>(".bar__fill");
+      const nextWidth = `${(ratio * 100).toFixed(1)}%`;
+      if (fill && fill.style.width !== nextWidth) fill.style.width = nextWidth;
+      return true;
+    }
+    case "list": {
+      const rows = widget.items.map((item) =>
+        element("div", "list__row", [
+          element("span", undefined, item.primary),
+          item.secondary ? element("span", "list__secondary", item.secondary) : null,
+        ]),
+      );
+      root.replaceChildren(...rows);
+      return true;
+    }
+    case "toggle": {
+      const input = root.querySelector<HTMLInputElement>("input");
+      if (!input) return false;
+      if (input.checked !== widget.value) input.checked = widget.value;
+      input.setAttribute("aria-label", widget.label);
+      setIfChanged(root.querySelector("span") ?? undefined, widget.label);
+      return true;
+    }
+    case "slider": {
+      const input = root.querySelector<HTMLInputElement>("input");
+      if (!input) return false;
+      const nextStep = String(widget.step > 0 ? widget.step : (widget.max - widget.min) / 100);
+      const same =
+        input.min === String(widget.min) && input.max === String(widget.max) && input.step === nextStep;
+      if (!same) return false;
+      const next = String(widget.value);
+      if (input.value !== next) input.value = next;
+      const output = root.querySelector<HTMLElement>(".slider__value");
+      if (output) setIfChanged(output, format(widget.value, widget.unit));
+      setIfChanged(root.firstElementChild as HTMLElement | undefined, widget.label);
+      return true;
+    }
+    case "knob": {
+      if (
+        widget.style === "vintage" !== root.contains(root.querySelector(".knob__tick")) ||
+        root.getAttribute("aria-valuemin") !== String(widget.min) ||
+        root.getAttribute("aria-valuemax") !== String(widget.max)
+      ) {
+        // Geometry parameters changed; a fresh widget is safer than patching.
+        return false;
+      }
+      const svg = root.querySelector<SVGElement>("svg.knob");
+      const needle = root.querySelector<SVGElement>("line.knob__pointer");
+      const fill = root.querySelector<SVGElement>("path.knob__fill");
+      const value = root.querySelector<HTMLElement>(".knob__value");
+      const derived = root.querySelector<HTMLElement>(".knob__derived");
+      if (!svg || !needle || !fill || !value) return false;
+
+      const vintage = widget.style === "vintage";
+      const radius = knobSize(vintage) / 2 - 6;
+      const ratio = normalise(widget.value, widget.min, widget.max);
+      fill.setAttribute("d", knobArcPath(vintage, 0, Math.max(ratio, 0.001), radius));
+      const outer = knobPointOn(vintage, ratio, radius - (vintage ? 20 : 16));
+      const inner = knobPointOn(vintage, ratio, vintage ? 10 : 12);
+      needle.setAttribute("x1", String(inner.x));
+      needle.setAttribute("y1", String(inner.y));
+      needle.setAttribute("x2", String(outer.x));
+      needle.setAttribute("y2", String(outer.y));
+      svg.setAttribute("aria-valuenow", widget.value.toFixed(3));
+      setIfChanged(value, format(widget.value, widget.unit));
+      if (derived) setIfChanged(derived, widget.readout ?? "");
+      setIfChanged(
+        root.querySelector(".knob__label") as HTMLElement | undefined,
+        widget.label,
+      );
+      return true;
+    }
+    case "eq":
+    case "meter":
+      // The EQ curve and meters repaint from engine state; rebuild the widget.
+      return false;
+    default:
+      return false;
+  }
+}
+
+function setIfChanged(node: HTMLElement | undefined, text: string): void {
+  if (node && node.textContent !== text) node.textContent = text;
 }

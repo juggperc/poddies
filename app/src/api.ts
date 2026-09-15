@@ -218,6 +218,9 @@ export const api = {
   openPluginsFolder: () => invoke<void>("open_plugins_folder"),
   playbackStarted: (episodeId: string) =>
     invoke<void>("playback_started", { episodeId }),
+  /** The same-origin media-proxy URL for an enclosure, so plugin DSP sees the
+   * bytes even when the CDN is CORS-restrictive. */
+  streamFor: (url: string) => invoke<string>("stream_url", { url }),
   recordProgress: (
     episodeId: string,
     positionSecs: number,

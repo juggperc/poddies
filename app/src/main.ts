@@ -1,7 +1,13 @@
 import { listen } from "@tauri-apps/api/event";
 
 import * as engine from "./audio";
-import { paintMeters, renderWidget as renderPluginWidget, type WidgetHost } from "./widgets";
+import {
+  paintMeters,
+  renderWidget as renderPluginWidget,
+  patchWidgets,
+  type WidgetHost,
+  isInteracting,
+} from "./widgets";
 import {
   api,
   type DiscoveryItemView,
@@ -125,12 +131,26 @@ function button(
   return node;
 }
 
+/**
+ * Warm a URL in the image cache. Re-rendering a list re-creates every
+ * `artwork()` node; a warmed URL is served from memory and paints in the same
+ * frame, so a rebuild is invisible instead of a refill-from-network blink.
+ */
+const warm = new Map<string, Promise<unknown>>();
+function warmImage(url: string): void {
+  if (warm.has(url)) return;
+  const image = new Image();
+  image.src = url;
+  warm.set(url, image.decode().catch(() => {}));
+}
+
 /** Artwork with a quiet monochrome fallback so a missing image is invisible. */
 function artwork(url: string | null, className: string): HTMLElement {
   const fallback = () =>
     el("span", { class: `${className} artwork-fallback`, attrs: { "aria-hidden": "true" } });
 
   if (!url) return fallback();
+  warmImage(url);
 
   const img = document.createElement("img");
   img.className = className;
@@ -146,6 +166,82 @@ function artwork(url: string | null, className: string): HTMLElement {
     { once: true },
   );
   return img;
+}
+
+/**
+ * Replace a persistent container's contents — but only when they actually
+ * changed, and then without losing scroll state.
+ *
+ * This is the anti-flicker primitive the app leans on: most render calls are
+ * *state refreshes* (play/pause, a preference committed, a plugin reloaded)
+ * that paint the same tree. Rebuilding identical content is what makes images
+ * blink, sliders jump under the pointer and scroll positions reset, so a
+ * candidate tree is built offscreen first. When it does change, scroll
+ * offsets are recorded and re-applied.
+ */
+function swap(container: HTMLElement, build: () => Node[]): void {
+  const candidate = el("div", {}, build());
+  if (renderedSignature(candidate) === renderedSignature(container)) return;
+
+  // A widget is mid-drag: replacing its node would kill the gesture. Defer the
+  // swap to the next idle moment instead of fighting the user's pointer.
+  if (isInteracting()) {
+    deferWhileInteracting(() => swap(container, build));
+    return;
+  }
+
+  // Scrollable regions inside the subtree are being replaced wholesale; keep
+  // their offsets, matched by position, so nothing scrolls back to the top.
+  const containerTop = container.scrollTop;
+  const before = [...container.querySelectorAll<HTMLElement>(".pane__scroll")].map(
+    (node) => node.scrollTop,
+  );
+
+  container.replaceChildren(...candidate.childNodes);
+
+  container.scrollTop = Math.min(containerTop, container.scrollHeight);
+  const fresh = [...container.querySelectorAll<HTMLElement>(".pane__scroll")];
+  fresh.forEach((node, index) => {
+    node.scrollTop = before[index] ?? 0;
+  });
+}
+
+const deferred: (() => void)[] = [];
+
+function deferWhileInteracting(fn: () => void): void {
+  deferred.push(fn);
+}
+
+/**
+ * Flush queued UI updates after every pointer release; while a drag is still
+ * held (several defers may stack), nothing runs.
+ */
+function installDeferredFlush(): void {
+  window.addEventListener("pointerup", () => {
+    window.setTimeout(() => {
+      if (isInteracting() || deferred.length === 0) return;
+      for (const task of deferred.splice(0)) task();
+    }, 0);
+  });
+}
+
+/**
+ * The serialized DOM of a subtree, with live-painted state neutralized so it
+ * never counts as a content change. Plugin meters are repainted by the meter
+ * loop between renders; their fill width, readout text and hot class are
+ * engine output, not content, so they are rewritten to the canonical values a
+ * fresh render would produce before comparison.
+ */
+function renderedSignature(container: HTMLElement): string {
+  const copy = container.cloneNode(true) as HTMLElement;
+  for (const node of copy.querySelectorAll<HTMLElement>("[data-meter]")) {
+    const fill = node.querySelector<HTMLElement>(".meter__fill");
+    if (fill) fill.style.width = "";
+    const readout = node.querySelector<HTMLElement>(".meter__readout");
+    if (readout) readout.textContent = "—";
+    node.classList.remove("meter--hot");
+  }
+  return copy.innerHTML;
 }
 
 function svg(paths: string, size = 14): SVGElement {
@@ -354,6 +450,47 @@ audio.preload = "metadata";
 
 let lastReported = 0;
 
+/* Player discipline (modelled on how players like VLC and Apple Podcasts treat
+ * themselves): a media element is fed same-origin URLs through the app's media
+ * proxy whenever its bytes are routed through the plugin graph, a resume is
+ * prepared before playback (metadata first, playhead placed as soon as the
+ * duration is known), scrubbing is a scrub→intent→commit interaction rather
+ * than a seek-per-pixel, and finishing an episode advances to the next one.
+ */
+
+const streamCache = new Map<string, Promise<string>>();
+
+/** The playback URL for an enclosure. Direct when the element plays as itself;
+ * same-origin proxied when (or once) plugin units route its samples, since
+ * routed cross-origin media is silenced by the browser. */
+function playableUrl(episode: EpisodeView): Promise<string> {
+  const direct = episode.enclosure_url || "";
+  if (!engine.isRouted() || !direct) {
+    return Promise.resolve(direct);
+  }
+  const existing = streamCache.get(direct);
+  if (existing) return existing;
+  const pending = api
+    .streamFor(direct)
+    .catch((error) => {
+      streamCache.delete(direct);
+      throw error;
+    });
+  streamCache.set(direct, pending);
+  return pending;
+}
+
+/** Where an episode resumes: nowhere for a tail you already played. */
+function resumePositionFor(episode: EpisodeView): number {
+  const duration = episode.duration_secs ?? 0;
+  if (episode.completed || (duration > 0 && episode.position_secs >= duration - 15)) return 0;
+  return episode.position_secs > 5 ? episode.position_secs : 0;
+}
+
+/** Set at play time when there is a position to restore; consumed when the
+ * metadata makes seeking into the stream legal. */
+let pendingSeekSecs: number | null = null;
+
 function reportProgress(force: boolean, completed = false): void {
   const episode = state.current;
   if (!episode) return;
@@ -375,14 +512,19 @@ async function playEpisode(episode: EpisodeView): Promise<void> {
 
   reportProgress(true);
   state.current = episode;
-  state.position = episode.position_secs;
   state.duration = episode.duration_secs ?? 0;
-  audio.src = episode.enclosure_url;
-  audio.playbackRate = state.rate;
+  const from = resumePositionFor(episode);
+  state.position = from;
+  pendingSeekSecs = from > 0 ? from : null;
 
-  if (episode.position_secs > 5 && (!episode.duration_secs || episode.position_secs < episode.duration_secs - 15)) {
-    audio.currentTime = episode.position_secs;
+  const src = await playableUrl(episode);
+  if (!src) {
+    showStatus("This episode has no audio attached");
+    return;
   }
+  if (audio.src !== src) audio.src = src;
+  if (!pendingSeekSecs) audio.currentTime = 0;
+  audio.playbackRate = state.rate;
 
   try {
     await audio.play();
@@ -401,17 +543,55 @@ async function playEpisode(episode: EpisodeView): Promise<void> {
   renderNowPlaying();
 }
 
+/** The play/pause press: resume from a restored position on a fresh open. */
 function togglePlay(): void {
   if (!state.current) return;
   if (audio.paused) {
     void engine.resume();
     void audio.play().then(() => {
       state.playing = true;
-      renderNowPlaying();
+      syncTransport();
     });
   } else {
     audio.pause();
   }
+}
+
+/**
+ * Apple Podcasts-style resume: the episode is *ready* before it is played.
+ * Called once the audio graph has settled, because the proxy decision depends
+ * on whether plugin units route the element. The stream preloads metadata and
+ * the playhead is placed the instant seeking into it is legal, but playback
+ * waits for the user's press: a fresh open of the app resumes, it does not
+ * autostart.
+ */
+function prepareResume(): void {
+  const episode = state.current;
+  if (!episode || state.playing) return;
+  pendingSeekSecs = state.position > 0 ? state.position : null;
+  void (async () => {
+    try {
+      const src = await playableUrl(episode);
+      // Only swap the source when it is not already the intended one.
+      if (src && !state.playing && audio.src !== src) {
+        audio.src = src;
+        audio.playbackRate = state.rate;
+      }
+    } catch {
+      /* network trouble at open: the play button will ask again */
+    }
+  })();
+}
+
+/** The episode after `current` in the list the user is listening along — the
+ * natural "up next" of a show view, Latest as the default. */
+function nextEpisodeAfter(currentId: string): EpisodeView | null {
+  const list =
+    state.route.kind === "show" && state.episodes.length > 0
+      ? state.episodes
+      : state.library.latest;
+  const index = list.findIndex((episode) => episode.id === currentId);
+  return index >= 0 ? list[index + 1] ?? null : null;
 }
 
 function seekBy(delta: number): void {
@@ -419,7 +599,7 @@ function seekBy(delta: number): void {
   const limit = Number.isFinite(audio.duration) ? audio.duration : state.position + delta;
   audio.currentTime = Math.max(0, Math.min(limit, audio.currentTime + delta));
   reportProgress(true);
-  renderNowPlaying();
+  refreshScrubber();
 }
 
 function updateMediaSession(episode: EpisodeView): void {
@@ -444,19 +624,28 @@ function installAudioHandlers(): void {
     if (Number.isFinite(audio.duration) && audio.duration > 0) {
       state.duration = Math.round(audio.duration);
     }
-    renderNowPlaying();
+    // The scrubber and the clock live on persistent nodes; updating them
+    // in place avoids a whole-pane rebuild right as playback starts.
+    if (pendingSeekSecs !== null) {
+      // Seeking before metadata is legal is silently ignored; this is the
+      // first instant the restored playhead can be placed.
+      audio.currentTime = pendingSeekSecs;
+      state.position = pendingSeekSecs;
+      pendingSeekSecs = null;
+    }
+    refreshScrubber();
   });
 
   audio.addEventListener("play", () => {
     state.playing = true;
-    renderNowPlaying();
+    syncTransport();
     renderMiddle();
   });
 
   audio.addEventListener("pause", () => {
     state.playing = false;
     reportProgress(true);
-    renderNowPlaying();
+    syncTransport();
     renderMiddle();
   });
 
@@ -464,14 +653,27 @@ function installAudioHandlers(): void {
     state.playing = false;
     state.position = state.duration;
     reportProgress(true, true);
-    renderNowPlaying();
+    syncTransport();
+    refreshScrubber();
     renderMiddle();
+    // Continue listening the way Apple Podcasts does: the next episode of the
+    // list in play follows the one that ended.
+    const next = state.current ? nextEpisodeAfter(state.current.id) : null;
+    if (next && next.enclosure_url) {
+      void playEpisode(next).then(() => {
+        // Autoplay after a user-initiated stream that just ended is permitted;
+        // a refusal falls back to a ready state rather than an error banner.
+        if (!state.playing) showStatus("Paused: couldn't play the next episode");
+      });
+    } else {
+      renderNowPlaying();
+    }
   });
 
   audio.addEventListener("error", () => {
     if (state.current) showStatus("Couldn't play this episode");
     state.playing = false;
-    renderNowPlaying();
+    syncTransport();
   });
 }
 
@@ -569,13 +771,13 @@ function renderLibrary(): void {
   // Settings is pinned in the footer with "Add a feed", so it is always in reach
   // however long the subscription list grows — and its highlight lines up with
   // the nav rows above.
-  dom.libraryFooterNav.replaceChildren(
+  swap(dom.libraryFooterNav, () => [
     navItem("settings", GLYPH.settings, "Settings", "", () => setRoute({ kind: "settings" })),
-  );
+  ]);
 
   // The search field and the footer live outside this scroll region, so a
   // rebuild never touches a focused input.
-  dom.libraryScroll.replaceChildren(...scroll);
+  swap(dom.libraryScroll, () => scroll);
 }
 
 /**
@@ -724,9 +926,7 @@ function installAddFeedDialog(): void {
 }
 
 function renderMiddle(): void {
-  dom.middle.replaceChildren(
-    el("div", { class: "pane__scroll" }, [buildMiddle()]),
-  );
+  swap(dom.middle, () => [el("div", { class: "pane__scroll" }, [buildMiddle()])]);
 }
 
 function buildMiddle(): HTMLElement {
@@ -1282,16 +1482,16 @@ function panelWidgets(
   pluginIndex: number,
   panelId: string,
 ): HTMLElement {
-  const host: WidgetHost = {
-    onChange: (widgetId, value) => void changeWidget(pluginIndex, panelId, widgetId, value),
-  };
-  return el(
+  const host = panelHost(pluginIndex, panelId);
+  const root = el(
     "div",
     { class: "widgets" },
     content.widgets
       .map((widget) => renderPluginWidget(widget, host))
       .filter((node): node is HTMLElement => node !== null),
   );
+  root.dataset.panelKey = panelKey(pluginIndex, panelId);
+  return root;
 }
 
 /**
@@ -1330,6 +1530,9 @@ async function flushPanelChanges(): Promise<void> {
         if (state.route.kind === "panel" && state.route.panelId === panelId) {
           state.panelContent = content;
         }
+        // In-place widget refresh: the knob the user turned stays mounted with
+        // its drag intact; only its display is pulled to the new value.
+        refreshPanelDisplays(pluginIndex, panelId, content);
       } catch {
         /* the plugin may have stopped mid-drag */
       }
@@ -1337,8 +1540,35 @@ async function flushPanelChanges(): Promise<void> {
   );
 
   await refreshAudio();
-  renderMiddle();
-  renderNowPlaying();
+}
+
+/**
+ * Every mounted copy of a panel gets fresh widget values without a rebuild —
+ * the docked player control, an open popout, the full pane, wherever it is.
+ */
+function refreshPanelDisplays(pluginIndex: number, panelId: string, content: PanelContent): void {
+  const key = panelKey(pluginIndex, panelId);
+  const roots = [
+    ...dom.now.querySelectorAll<HTMLElement>(".widgets[data-panel-key]"),
+    ...dom.middle.querySelectorAll<HTMLElement>(".widgets[data-panel-key]"),
+  ].filter((node) => node.dataset.panelKey === key);
+  const dialog = dom.panelDialog.open
+    ? dom.panelDialogBody.querySelector<HTMLElement>(".widgets[data-panel-key]")
+    : null;
+  if (dialog && dialog.dataset.panelKey === key) roots.push(dialog);
+
+  for (const root of roots) {
+    if (patchWidgets(root, content, panelHost(pluginIndex, panelId)) === "patched") continue;
+    // A rebuild is the only honest answer when the widget structure changed;
+    // `swap` keeps it from flashing and its interaction guard keeps drags alive.
+    swap(root, () => [panelWidgets(content, pluginIndex, panelId)]);
+  }
+}
+
+function panelHost(pluginIndex: number, panelId: string): WidgetHost {
+  return {
+    onChange: (widgetId, value) => void changeWidget(pluginIndex, panelId, widgetId, value),
+  };
 }
 
 function panelKey(pluginIndex: number, panelId: string): string {
@@ -1348,15 +1578,12 @@ function panelKey(pluginIndex: number, panelId: string): string {
 /**
  * Rebuild the playback chain from what the plugins currently want. Called on
  * start-up, whenever a plugin is loaded or unloaded, and after any control
- * movement that could change a parameter.
+ * movement that could change a parameter. The pipeline itself decides whether
+ * the element gets routed: only an enabled unit opens that one-way door.
  */
 async function refreshAudio(): Promise<void> {
   try {
-    const units = await api.audioGraph();
-    // Only touch the element once a plugin actually wants audio: until then it
-    // plays directly, exactly as if no plugin existed.
-    if (units.length > 0) engine.attach(audio);
-    engine.apply(units);
+    engine.refresh(audio, await api.audioGraph());
   } catch (error) {
     console.error("[poddies] audio graph refresh failed:", error);
   }
@@ -1386,13 +1613,44 @@ function dockedPanels(): HTMLElement | null {
   return el("div", { class: "docks" }, blocks);
 }
 
-let nowRefs: { scrub: HTMLInputElement; elapsed: HTMLElement; total: HTMLElement } | null = null;
+interface NowRefs {
+  scrub: HTMLInputElement;
+  elapsed: HTMLElement;
+  total: HTMLElement;
+  play: HTMLButtonElement;
+  rates: HTMLButtonElement[];
+}
+
+const RATES = [0.8, 1, 1.2, 1.5, 2];
+let nowRefs: NowRefs | null = null;
+
+let scrubbing = false;
+let scrubIntent: number | null = null;
+let scrubTimer: number | undefined;
+
+/** Apply the user's latest scrub intent to the real playhead at a restrained
+ * cadence — one seek per 150 ms while dragging (quick scrubbing), and the
+ * exact value on release. */
+function commitScrubIntent(): void {
+  window.clearTimeout(scrubTimer);
+  scrubTimer = window.setTimeout(() => {
+    if (!scrubbing || scrubIntent === null) return;
+    const target = scrubIntent;
+    audio.currentTime = target;
+    state.position = target;
+  }, 150);
+}
+
+function endScrub(): void {
+  scrubbing = false;
+  scrubIntent = null;
+}
 
 function renderNowPlaying(): void {
   const episode = state.current;
 
   if (!episode) {
-    dom.now.replaceChildren(
+    swap(dom.now, () => [
       el("div", { class: "pane__scroll" }, [
         el("div", { class: "now" }, [
           el("div", { class: "now__art now__art--empty", attrs: { "aria-hidden": "true" } }, [
@@ -1405,7 +1663,7 @@ function renderNowPlaying(): void {
           dockedPanels(),
         ].filter((node): node is HTMLElement => node !== null)),
       ]),
-    );
+    ]);
     nowRefs = null;
     return;
   }
@@ -1420,20 +1678,31 @@ function renderNowPlaying(): void {
       "aria-label": "Seek",
     },
     on: {
+      // A drag is intent, not seeks: the clock follows the thumb, the real
+      // seek is throttled behind the playhead instead of per pixel, and the
+      // final value is committed at release (`change`).
       input: (event) => {
         const value = Number((event.target as HTMLInputElement).value);
+        scrubbing = true;
+        scrubIntent = value;
+        state.position = value;
+        if (nowRefs) nowRefs.elapsed.textContent = fmtClock(value);
+        commitScrubIntent();
+      },
+      change: (event) => {
+        const value = Number((event.target as HTMLInputElement).value);
+        endScrub();
         audio.currentTime = value;
         state.position = value;
         if (nowRefs) nowRefs.elapsed.textContent = fmtClock(value);
+        reportProgress(true);
       },
-      change: () => reportProgress(true),
     },
   }) as HTMLInputElement;
   scrub.value = String(Math.min(state.position, known || 1));
 
   const elapsed = el("span", { text: fmtClock(state.position) });
   const total = el("span", { text: fmtClock(known) });
-  nowRefs = { scrub, elapsed, total };
 
   const playButton = button(
     "button",
@@ -1443,7 +1712,7 @@ function renderNowPlaying(): void {
     [svg(state.playing ? GLYPH.pause : GLYPH.play, 18)],
   );
 
-  const rates = [0.8, 1, 1.2, 1.5, 2].map((rate) =>
+  const rates = RATES.map((rate) =>
     el("button", {
       class: "rate-btn",
       attrs: {
@@ -1456,15 +1725,17 @@ function renderNowPlaying(): void {
           state.rate = rate;
           audio.playbackRate = rate;
           reportProgress(true);
-          renderNowPlaying();
+          syncTransport();
         },
       },
     }),
-  );
+  ) as HTMLButtonElement[];
+
+  nowRefs = { scrub, elapsed, total, play: playButton, rates };
 
   const canPlay = Boolean(episode.enclosure_url);
 
-  dom.now.replaceChildren(
+  swap(dom.now, () => [
     el("div", { class: "pane__scroll" }, [
       el("div", { class: "now" }, [
         artwork(episode.image_url, "now__art artwork-fallback--lg"),
@@ -1490,11 +1761,31 @@ function renderNowPlaying(): void {
           : null,
       ].filter((node): node is HTMLElement => node !== null)),
     ]),
-  );
+  ]);
+}
+
+/**
+ * Keep the transport state current without rebuilding the pane: play/pause and
+ * rate changes flip glyphs and highlighted buttons in place, so nothing under
+ * the user's pointer resets while audio changes state. Seek state is handled
+ * separately by `refreshScrubber`.
+ */
+function syncTransport(): void {
+  if (!nowRefs) return;
+  const label = state.playing ? "Pause" : "Play";
+  nowRefs.play.setAttribute("aria-label", label);
+  nowRefs.play.title = label;
+  nowRefs.play.replaceChildren(svg(state.playing ? GLYPH.pause : GLYPH.play, 18));
+  nowRefs.rates.forEach((node, index) => {
+    node.setAttribute("aria-pressed", String(RATES[index] === state.rate));
+  });
 }
 
 function refreshScrubber(): void {
   if (!nowRefs) return;
+  // The user's thumb is in charge while they scrub the clock happens follows
+  // intent, and a fresh render takes over again here the drag ends.
+  if (scrubbing) return;
   const known = state.duration || 0;
   if (known > 0) {
     nowRefs.scrub.max = String(known);
@@ -1647,6 +1938,7 @@ function installPanelDialog(): void {
 /* ------------------------------------------------------------------- boot */
 
 async function boot(): Promise<void> {
+  installDeferredFlush();
   installAudioHandlers();
   installSearchField();
   installWindowDragging();
@@ -1715,9 +2007,16 @@ async function boot(): Promise<void> {
 
   if (state.library.in_progress.length > 0) {
     state.current = state.library.in_progress[0];
-    state.position = state.current.position_secs;
     state.duration = state.current.duration_secs ?? 0;
+    const from = resumePositionFor(state.current);
+    state.position = from;
   }
+
+  render();
+  await loadAllPanels();
+  await refreshAudio();
+  prepareResume();
+  render();
 
   render();
   await loadAllPanels();

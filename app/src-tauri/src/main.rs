@@ -11,6 +11,7 @@
 mod commands;
 mod services;
 mod state;
+mod stream;
 mod views;
 
 use std::collections::HashSet;
@@ -39,7 +40,7 @@ fn main() {
         std::process::exit(code);
     }
 
-    tauri::Builder::default()
+    stream::register(tauri::Builder::default())
         .setup(|app| {
             setup(app)?;
             Ok(())
@@ -83,6 +84,7 @@ fn main() {
             commands::open_plugins_folder,
             commands::playback_started,
             commands::record_progress,
+            commands::stream_url,
             commands::app_hide,
             commands::app_start_drag,
             commands::app_toggle_maximise,
@@ -173,7 +175,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let plugins_dir = data_dir.join("plugins");
     app.manage(AppState {
         library: shared,
-        plugins: Mutex::new(plugins),
+        plugins: Arc::new(Mutex::new(plugins)),
         plugin_reports: reports,
         plugins_dir,
         data_dir,

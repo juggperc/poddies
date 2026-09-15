@@ -7,7 +7,9 @@ use crate::services::SharedLibrary;
 
 pub struct AppState {
     pub library: Arc<SharedLibrary>,
-    pub plugins: Mutex<PluginHost>,
+    /// Shared, so commands that must wait on plugin processes can take an
+    /// owned handle and run off the main thread without lifetime knots.
+    pub plugins: Arc<Mutex<PluginHost>>,
     pub plugin_reports: Vec<LoadReport>,
     pub plugins_dir: PathBuf,
     pub data_dir: PathBuf,

@@ -3,7 +3,7 @@
 //! Every command is synchronous and short. Feed refreshes are the only slow
 //! operation, and the UI keeps them off the interactive path.
 
-use std::sync::MutexGuard;
+use std::sync::{Arc, MutexGuard};
 use std::time::Duration;
 
 use poddies_core::discovery::{build_profile, rank, ListeningProfile, ScoredCandidate, Weights};
@@ -475,11 +475,22 @@ pub fn plugin_panel_change(
 }
 
 /// The audio units every enabled plugin wants in the playback chain.
+///
+/// Async on purpose: this is the only command that waits on plugin processes
+/// (up to the per-call timeout each), so it must not hold the main thread while
+/// a plugin is slow to answer.
 #[tauri::command]
-pub fn audio_graph(state: State<'_, AppState>) -> Vec<AudioUnit> {
-    lock_plugins(&state).audio_graph()
+pub async fn audio_graph(state: State<'_, AppState>) -> Result<Vec<AudioUnit>, String> {
+    let plugins = Arc::clone(&state.plugins);
+    tauri::async_runtime::spawn_blocking(move || {
+        let guard = plugins
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        guard.audio_graph()
+    })
+    .await
+    .map_err(|err| err.to_string())
 }
-
 
 #[tauri::command]
 pub fn plugin_status(state: State<'_, AppState>) -> Vec<PluginStatusView> {
@@ -704,6 +715,14 @@ fn playback_event(state: &AppState, episode_id: &str, position_secs: f64) -> Opt
 fn broadcast_playback(state: &AppState, method: &str, event: &PlaybackEvent) {
     let payload = serde_json::to_value(event).unwrap_or(Value::Null);
     lock_plugins(state).broadcast(method, payload);
+}
+
+/// The playback URL for an enclosure: served by the app's same-origin media
+/// proxy, so the audio element's bytes are never CORS-tainted and plugin
+/// processing (Web Audio) actually receives them.
+#[tauri::command]
+pub fn stream_url(url: String) -> Result<String, String> {
+    crate::stream::proxy_url(&url)
 }
 
 #[tauri::command]
