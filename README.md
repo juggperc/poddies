@@ -8,8 +8,7 @@
 <h3 align="center">An ultra-minimal podcast client for Windows</h3>
 
 <p align="center">
-  A lean Rust host. A first-class, sandboxed plugin system.<br>
-  No accounts, no telemetry, no AI filler, and no black-box recommendations.
+  Super lean Podcasts app built in Rust with deep customisation.
 </p>
 
 <p align="center">
@@ -26,32 +25,26 @@
 
 ---
 
-Three panes: **library**, **episode list**, **now playing**. Mica behind everything,
-generous whitespace, Geist, one accent colour — **none**. Album art is the only
-pigment on screen, so a quiet interface stays quiet even when a thousand episodes
-are in it. Closing or minimising sends it to the system tray; restoring plays a
-soft **bloom** opening animation.
+Easy to set up and use on all platforms.
 
 - **Subscriptions** — RSS 2.0, Atom, RSS 1.0 and JSON Feed all parse, with
   conditional refreshes (`If-None-Match` / `If-Modified-Since`) so checking for
   new episodes costs nothing when nothing changed. Add a feed from the dialog in
   the sidebar, and drop one from the same row on hover.
 - **Search** — your whole library, plus [Apple Podcasts](https://itunes.apple.com/search)
-  over its public, unauthenticated endpoint, so a query finds shows you have not
-  subscribed to yet. Add one in a click.
+  
 
   <p align="left">
     <img alt="Searching for design: local matches on top, then addable Apple Podcasts results with Subscribe buttons" src="docs/search.png" width="820">
   </p>
 
-- **Discovery that shows its work.** Candidate shows come from plugins; ranking
-  happens in the host as an explicit sum of named factors whose weights you can
-  drag. Every suggestion carries the reasons that moved it, inline.
-- **A plugin system that is genuinely easy** — scaffold, hot-reload, ship.
-- **Featherweight** — 8.9 MB exe, ~26 KB of JavaScript, no font downloads,
-  zero framework.
+- **Discovery that shows its work.** Adjust your own algorithm to your liking in detail!
+- **A plugin system that is genuinely easy** — You can basically make this your own app with a little time (or Claude)
+- **Featherweight** — 8.9 MB exe, ~26 KB of js, light and easy on ur cpu :)
+  
 
-## Quickstart
+## Quickstart Guide
+Just install from Releases. If you want to build it yourself:
 
 ```powershell
 # the UI must be compiled first: Tauri embeds it into the exe
@@ -141,15 +134,6 @@ Every recommendation carries the contributions that produced it as reason chips,
 and `popularity` from a source is only ever a tie-breaker, so nothing can quietly
 outweigh your own listening. The full maths is in
 [architecture.md](docs/architecture.md#the-discovery-algorithm).
-
-## Design
-
-A near-monochrome world. State, rank and selection are carried by tone, weight
-and space; the only saturated colour is podcast artwork. Geist is bundled with
-the binary, so the interface is identical everywhere and costs no network request.
-The titlebar is the only chrome: drag it, double-click it to maximise, and the
-wordmark is inverted for dark mode so the work reads as one piece on any
-wallpaper. All motion uses one easing curve and honours `prefers-reduced-motion`.
 
 ## Repository
 
