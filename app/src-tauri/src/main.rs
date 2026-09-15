@@ -23,7 +23,7 @@ use tauri::{Emitter, Manager, WindowEvent};
 use poddies_core::library::Library;
 use poddies_plugin_host::{LoadReport, PluginHost, WorkerLauncher};
 
-use crate::services::{LibraryServices, SharedLibrary};
+use crate::services::{lock_library, LibraryServices, SharedLibrary};
 use crate::state::{plugin_search_paths, AppState};
 
 fn main() {
@@ -77,6 +77,8 @@ fn main() {
             commands::plugin_status,
             commands::plugins_directory,
             commands::plugin_reload,
+            commands::plugin_set_enabled,
+            commands::open_plugins_folder,
             commands::playback_started,
             commands::record_progress,
             commands::app_hide,
@@ -121,6 +123,11 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let mut reports: Vec<LoadReport> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
+    let disabled: HashSet<String> = {
+        let library = lock_library(&shared);
+        library.settings.disabled_plugins.iter().cloned().collect()
+    };
+
     for path in plugin_search_paths(exe_dir.as_deref(), &data_dir) {
         if !path.is_dir() {
             continue;
@@ -130,6 +137,17 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             let plugin_id = manifest.as_ref().ok().map(|manifest| manifest.id.clone());
             if let Some(id) = &plugin_id {
                 if !seen.insert(id.clone()) {
+                    continue;
+                }
+                // A plugin the user switched off is never started, so it costs
+                // nothing at launch and cannot contribute panels or candidates.
+                if disabled.contains(id) {
+                    eprintln!("[poddies] plugin disabled by preference: {id}");
+                    reports.push(LoadReport {
+                        directory,
+                        plugin_id,
+                        result: Ok(()),
+                    });
                     continue;
                 }
             }

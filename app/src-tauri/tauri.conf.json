@@ -40,11 +40,27 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "publisher": "Poddies",
+    "copyright": "MIT licensed",
+    "shortDescription": "An ultra-minimal podcast client.",
+    "longDescription": "Poddies is an ultra-minimal podcast client for Windows: a compact three-pane window over a Mica background, a transparent discovery queue, and a sandboxed plugin system.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": {
+      "../../plugins/poddies-plugin-stats/plugin.json": "plugins/dev.poddies.stats/plugin.json",
+      "../../plugins/poddies-plugin-stats/poddies_plugin_stats.dll": "plugins/dev.poddies.stats/poddies_plugin_stats.dll",
+      "../../plugins/poddies-plugin-apple-podcasts/plugin.json": "plugins/dev.poddies.apple-podcasts/plugin.json",
+      "../../plugins/poddies-plugin-apple-podcasts/poddies_plugin_apple_podcasts.dll": "plugins/dev.poddies.apple-podcasts/poddies_plugin_apple_podcasts.dll",
+      "../../python/poddies/__init__.py": "python/poddies/__init__.py"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
   }
 }

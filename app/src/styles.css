@@ -1335,7 +1335,14 @@ input {
   color: var(--text-mid);
 }
 
-.plugin-row__reload {
+.plugin-row__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--step-2);
+  flex-shrink: 0;
+}
+
+.plugin-row__icon {
   width: 28px;
   height: 28px;
   border-radius: var(--radius);
@@ -1347,13 +1354,39 @@ input {
     transform var(--t-fast) var(--ease);
 }
 
-.plugin-row__reload:hover {
+.plugin-row__icon:hover {
   background: var(--surface-2);
   color: var(--text-hi);
 }
 
-.plugin-row__reload:active {
+.plugin-row__icon:active {
   transform: scale(0.92);
+}
+
+.plugin-row__toggle {
+  min-width: 68px;
+  text-align: center;
+}
+
+/* The folder line: path on the left, its shortcut on the right. */
+.plugin-folder {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--step-3);
+  margin-top: var(--step-2);
+  padding-top: var(--step-3);
+  border-top: 1px solid var(--line);
+}
+
+.plugin-folder .plugin-path {
+  margin: 0;
+  min-width: 0;
+}
+
+.status-dot--disabled {
+  background: none;
+  border: 1px dashed var(--line-strong);
 }
 
 /* --------------------------------------------------------------------------

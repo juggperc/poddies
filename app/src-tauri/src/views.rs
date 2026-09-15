@@ -86,12 +86,15 @@ pub struct PluginStatusView {
     pub id: String,
     pub name: String,
     pub version: String,
-    /// Whether the plugin is running. A failure entry is not running.
+    /// The worker is running right now.
     pub ok: bool,
-    /// Why the plugin is stopped, when it is.
+    /// The user wants this plugin on. `ok == false && enabled == true` means it
+    /// failed; `enabled == false` means the user switched it off.
+    pub enabled: bool,
+    /// Why it is not running, when it is not.
     pub detail: String,
     /// Position in the host's plugin list, so the interface can reload it.
-    /// Absent for a plugin that failed to load, since there is nothing to reload.
+    /// Absent for a plugin that is not loaded.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub index: Option<usize>,
 }

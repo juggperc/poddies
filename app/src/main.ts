@@ -466,7 +466,9 @@ function installAudioHandlers(): void {
 /* -------------------------------------------------------------- rendering */
 
 function renderLibrary(): void {
-  const failed = state.statuses.filter((status) => !status.ok);
+  // Only a plugin the user wants running but which is not counts as a failure;
+  // switching one off is not a problem to report.
+  const failed = state.statuses.filter((status) => !status.ok && status.enabled);
 
   const primary: Node[] = [
     navItem("discovery", GLYPH.discovery, "Discovery", "", () =>
@@ -1002,71 +1004,148 @@ function rankingSection(): HTMLElement {
 }
 
 function pluginsSection(): HTMLElement {
+  const heading = el("div", { class: "settings__head" }, [
+    el("h3", { class: "settings__title", text: "Plugins" }),
+  ]);
+
+  const folder = el("div", { class: "plugin-folder" }, [
+    el("p", {
+      class: "plugin-path",
+      text: state.pluginsDir,
+      title: "Drop a plugin directory here to install it",
+    }),
+    el("button", {
+      class: "link-btn",
+      attrs: { type: "button" },
+      text: "Open folder",
+      on: {
+        click: async () => {
+          try {
+            await api.openPluginsFolder();
+          } catch (error) {
+            showStatus(String(error));
+          }
+        },
+      },
+    }),
+  ]);
+
   if (state.statuses.length === 0) {
     return el("section", { class: "settings__section" }, [
-      el("div", { class: "settings__head" }, [
-        el("h3", { class: "settings__title", text: "Plugins" }),
-      ]),
+      heading,
       el("p", {
         class: "widget__text",
-        text: "No plugins are installed. Drop a plugin directory into the folder below and they appear here and in the library.",
+        text: "No plugins are installed. Drop a plugin directory into the folder below and it appears here and in the library.",
       }),
-      el("p", { class: "plugin-path", text: state.pluginsDir }),
+      folder,
     ]);
   }
 
   return el("section", { class: "settings__section" }, [
-    el("div", { class: "settings__head" }, [
-      el("h3", { class: "settings__title", text: "Plugins" }),
-    ]),
+    heading,
     el(
       "div",
       { class: "plugin-list" },
-      state.statuses.map((status) =>
-        el("div", { class: "plugin-row" }, [
-          el("span", {
-            class: `status-dot${status.ok ? "" : " status-dot--off"}`,
-            title: status.ok ? "Running" : status.detail,
-          }),
-          el("div", { class: "plugin-row__body" }, [
-            el("div", { class: "plugin-row__name" }, [
-              status.name,
-              status.version ? el("span", { class: "plugin-row__version", text: status.version }) : null,
-            ].filter((node): node is HTMLElement => node !== null)),
-            status.ok
-              ? null
-              : el("div", { class: "plugin-row__detail", text: status.detail }),
-          ]),
-          typeof status.index === "number"
-            ? el("button", {
-                class: "plugin-row__reload",
-                attrs: { type: "button", "aria-label": `Reload ${status.name}` },
-                on: {
-                  click: async () => {
-                    try {
-                      showStatus(`Reloading ${status.name}…`);
-                      await api.pluginReload(status.index as number);
-                      const [panels, statuses] = await Promise.all([
-                        api.pluginPanels(),
-                        api.pluginStatus(),
-                      ]);
-                      state.panels = panels;
-                      state.statuses = statuses;
-                      state.panelContent = null;
-                      showStatus(`${status.name} reloaded`);
-                    } catch (error) {
-                      showStatus(String(error));
-                    }
-                    render();
-                  },
-                },
-              }, [svg(GLYPH.reload, 14)])
-            : null,
-        ]),
-      ),
+      state.statuses.map((status) => pluginRow(status)),
     ),
-    el("p", { class: "plugin-path", text: state.pluginsDir, title: "Drop a plugin directory here to install it" }),
+    folder,
   ]);
+}
+
+function pluginRow(status: PluginStatusView): HTMLElement {
+  const dot = status.ok
+    ? ""
+    : status.enabled
+      ? " status-dot--off"
+      : " status-dot--disabled";
+
+  const actions: Node[] = [];
+
+  if (typeof status.index === "number") {
+    actions.push(
+      el("button", {
+        class: "plugin-row__icon",
+        attrs: { type: "button", "aria-label": `Reload ${status.name}`, title: "Reload" },
+        on: { click: () => void reloadPlugin(status) },
+      }, [svg(GLYPH.reload, 14)]),
+    );
+  }
+
+  actions.push(
+    el("button", {
+      class: "link-btn plugin-row__toggle",
+      attrs: { type: "button" },
+      text: status.enabled ? "Disable" : "Enable",
+      on: { click: () => void setPluginEnabled(status, !status.enabled) },
+    }),
+  );
+
+  return el("div", { class: "plugin-row" }, [
+    el("span", {
+      class: `status-dot${dot}`,
+      title: status.ok ? "Running" : status.detail,
+    }),
+    el("div", { class: "plugin-row__body" }, [
+      el(
+        "div",
+        { class: "plugin-row__name" },
+        [
+          status.name,
+          status.version
+            ? el("span", { class: "plugin-row__version", text: status.version })
+            : null,
+        ].filter((node): node is HTMLElement => node !== null),
+      ),
+      status.ok ? null : el("div", { class: "plugin-row__detail", text: status.detail }),
+    ]),
+    el("div", { class: "plugin-row__actions" }, actions),
+  ]);
+}
+
+/// Re-read panels and status together: enabling or disabling changes both, and
+/// panel indices shift when a plugin leaves the host's list.
+async function refreshPlugins(): Promise<void> {
+  const [panels, statuses] = await Promise.all([api.pluginPanels(), api.pluginStatus()]);
+  state.panels = panels;
+  state.statuses = statuses;
+  state.panelContent = null;
+
+  // The panel that was open may belong to the plugin that just changed.
+  if (state.route.kind === "panel") {
+    const stillThere = panels.some(
+      (panel) =>
+        panel.plugin_index === (state.route as { pluginIndex: number }).pluginIndex &&
+        panel.panel_id === (state.route as { panelId: string }).panelId,
+    );
+    if (!stillThere) state.route = { kind: "latest" };
+  }
+  // A disabled discovery source leaves a stale queue behind.
+  state.discovery = [];
+}
+
+async function reloadPlugin(status: PluginStatusView): Promise<void> {
+  if (typeof status.index !== "number") return;
+  try {
+    showStatus(`Reloading ${status.name}…`);
+    await api.pluginReload(status.index);
+    await refreshPlugins();
+    showStatus(`${status.name} reloaded`);
+  } catch (error) {
+    showStatus(String(error));
+  }
+  render();
+}
+
+async function setPluginEnabled(status: PluginStatusView, enabled: boolean): Promise<void> {
+  try {
+    showStatus(`${enabled ? "Enabling" : "Disabling"} ${status.name}…`);
+    await api.pluginSetEnabled(status.id, enabled);
+    await refreshPlugins();
+    showStatus(`${status.name} ${enabled ? "enabled" : "disabled"}`);
+  } catch (error) {
+    showStatus(String(error));
+  }
+  render();
 }
 
 function discoveryRow(item: DiscoveryItemView): HTMLElement {

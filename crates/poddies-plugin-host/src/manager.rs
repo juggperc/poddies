@@ -509,10 +509,12 @@ impl PluginHost {
     }
 
     /// Every panel contributed by a loaded plugin that declared the capability.
+    /// A plugin whose worker has died contributes nothing, so a stopped plugin
+    /// cannot leave a dead panel in the interface.
     pub fn panels(&self) -> Vec<PanelEntry> {
         let mut panels = Vec::new();
         for (index, plugin) in self.plugins.iter().enumerate() {
-            if !plugin.has(Capability::UiPanel) {
+            if !plugin.has(Capability::UiPanel) || !plugin.is_alive() {
                 continue;
             }
             for descriptor in &plugin.info.ui_panels {
@@ -620,6 +622,24 @@ impl PluginHost {
         let plugin = self.load_one(directory, manifest)?;
         self.plugins.insert(index, plugin);
         Ok(())
+    }
+
+    /// Stop a plugin and forget it. Dropping the entry kills the worker and
+    /// closes the sandbox, so nothing is left running.
+    ///
+    /// Indices after `index` shift down; callers re-read the plugin list rather
+    /// than holding an index across this call.
+    pub fn unload(&mut self, index: usize) -> Result<PathBuf, PluginError> {
+        if index >= self.plugins.len() {
+            return Err(PluginError::new(
+                "unknown_plugin",
+                format!("no plugin at {index}"),
+            ));
+        }
+        let plugin = self.plugins.remove(index);
+        let directory = plugin.directory.clone();
+        drop(plugin);
+        Ok(directory)
     }
 
     pub fn shutdown_all(&self) {

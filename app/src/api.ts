@@ -71,6 +71,8 @@ export interface PluginStatusView {
   name: string;
   version: string;
   ok: boolean;
+  /** The user wants this plugin on; false means they switched it off. */
+  enabled: boolean;
   detail: string;
   index?: number;
 }
@@ -132,6 +134,9 @@ export const api = {
   pluginsDirectory: () => invoke<string>("plugins_directory"),
   pluginReload: (pluginIndex: number) =>
     invoke<void>("plugin_reload", { pluginIndex }),
+  pluginSetEnabled: (pluginId: string, enabled: boolean) =>
+    invoke<void>("plugin_set_enabled", { pluginId, enabled }),
+  openPluginsFolder: () => invoke<void>("open_plugins_folder"),
   playbackStarted: (episodeId: string) =>
     invoke<void>("playback_started", { episodeId }),
   recordProgress: (

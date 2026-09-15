@@ -102,6 +102,27 @@ If a Job Object cannot be created — for example when the host is itself alread
 inside a job that forbids nesting — the plugin runs unsandboxed and the host
 logs it rather than failing to load.
 
+## Plugin lifecycle
+
+A plugin is discovered, loaded, and then runs for the life of the session. Three
+things change that:
+
+- **Disable** (Settings) unloads it: the entry leaves the host's list, which
+  drops the `LoadedPlugin`, which kills the worker and closes its Job Object. Its
+  panel disappears from the sidebar and it stops contributing discovery
+  candidates, immediately. The id is recorded in `Settings::disabled_plugins`
+  alongside the library, so it is never started again until it is switched back
+  on. Enabling loads it from the directory it was found in.
+- **Reload** restarts a plugin in place, which is how you pick up a rebuilt DLL
+  without restarting the app.
+- **A crash** leaves the entry in place with a dead worker, reported as
+  "Stopped unexpectedly" with a Reload action. Pending calls fail with
+  `plugin_exited` rather than hanging.
+
+Because disabling changes the host's plugin list, panel indices shift; the
+interface re-reads panels and status together after any change and opens the
+latest episodes if the panel it was showing has gone.
+
 ## The discovery algorithm
 
 Deliberately not a black box. The score is a linear combination of named

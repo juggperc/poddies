@@ -22,6 +22,10 @@ use crate::model::{Episode, EpisodeId, PlaybackState, Show, ShowId};
 pub struct Settings {
     pub discovery: Weights,
     pub avoid_explicit: bool,
+    /// Plugin ids the user has switched off. Kept with the library so the
+    /// choice survives a restart.
+    #[serde(default)]
+    pub disabled_plugins: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

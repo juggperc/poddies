@@ -19,7 +19,7 @@ use serde_json::Value;
 use tauri::State;
 
 use crate::services::{is_subscribed, lock_library};
-use crate::state::AppState;
+use crate::state::{plugin_search_paths, AppState};
 use crate::views::{
     rfc3339, DiscoveryItemView, EpisodeView, LibraryView, PanelView, PluginStatusView, ReasonView,
     RefreshSummary, SearchView, ShowView,
@@ -453,51 +453,210 @@ pub fn plugin_panel_content(
 
 #[tauri::command]
 pub fn plugin_status(state: State<'_, AppState>) -> Vec<PluginStatusView> {
+    let disabled = {
+        let library = lock_library(&state.library);
+        library.settings.disabled_plugins.clone()
+    };
+
     let mut statuses: Vec<PluginStatusView> = {
         let plugins = lock_plugins(&state);
         plugins
             .plugins()
             .iter()
             .enumerate()
-            .map(|(index, plugin)| PluginStatusView {
-                id: plugin.manifest.id.clone(),
-                name: plugin.info.name.clone(),
-                version: plugin.info.version.clone(),
-                ok: plugin.is_alive(),
-                detail: if plugin.is_alive() {
-                    "running".to_string()
-                } else {
-                    "stopped".to_string()
-                },
-                index: Some(index),
+            .map(|(index, plugin)| {
+                let alive = plugin.is_alive();
+                PluginStatusView {
+                    id: plugin.manifest.id.clone(),
+                    name: plugin.info.name.clone(),
+                    version: plugin.info.version.clone(),
+                    ok: alive,
+                    enabled: true,
+                    detail: if alive {
+                        "Running".to_string()
+                    } else {
+                        "Stopped unexpectedly".to_string()
+                    },
+                    index: Some(index),
+                }
             })
             .collect()
     };
 
+    // A plugin the user switched off is not loaded, so it has to be found on
+    // disk to appear in the list at all.
+    let known: Vec<String> = statuses.iter().map(|status| status.id.clone()).collect();
+    for path in plugin_search_paths(
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|parent| parent.to_path_buf()))
+            .as_deref(),
+        &state.data_dir,
+    ) {
+        let Ok(entries) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let directory = entry.path();
+            if !directory.is_dir() {
+                continue;
+            }
+            let Ok(manifest) = poddies_plugin_host::worker::load_manifest(&directory) else {
+                continue;
+            };
+            if !disabled.contains(&manifest.id) || known.contains(&manifest.id) {
+                continue;
+            }
+            statuses.push(PluginStatusView {
+                id: manifest.id,
+                name: manifest.name,
+                version: manifest.version,
+                ok: false,
+                enabled: false,
+                detail: "Disabled".to_string(),
+                index: None,
+            });
+        }
+    }
+
     for report in &state.plugin_reports {
         if let Err(error) = &report.result {
-            let label = report
-                .plugin_id
-                .clone()
-                .unwrap_or_else(|| {
-                    report
-                        .directory
-                        .file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "unknown".to_string())
-                });
+            let label = report.plugin_id.clone().unwrap_or_else(|| {
+                report
+                    .directory
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "unknown".to_string())
+            });
+            // A disabled plugin reports "failed to load" at startup precisely
+            // because we skipped it; do not call that a failure.
+            if disabled.contains(&label) {
+                continue;
+            }
             statuses.push(PluginStatusView {
                 id: label.clone(),
                 name: label,
                 version: String::new(),
                 ok: false,
+                enabled: true,
                 detail: error.clone(),
                 index: None,
             });
         }
     }
 
+    // Loaded, disabled and failed entries arrive from three different sources.
+    // Sort them so a plugin keeps its place in the list when it is switched off,
+    // instead of jumping to the bottom.
+    statuses.sort_by(|a, b| {
+        a.name
+            .to_ascii_lowercase()
+            .cmp(&b.name.to_ascii_lowercase())
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
     statuses
+}
+
+/// Turn a plugin on or off. Enabling spawns a worker immediately; disabling
+/// stops one, so both take effect without a restart.
+#[tauri::command]
+pub fn plugin_set_enabled(
+    plugin_id: String,
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let directory = find_plugin_directory(&state, &plugin_id)
+        .ok_or_else(|| format!("{plugin_id} is not installed"))?;
+
+    if enabled {
+        let already_loaded = lock_plugins(&state)
+            .plugins()
+            .iter()
+            .any(|plugin| plugin.manifest.id == plugin_id);
+        if !already_loaded {
+            lock_plugins(&state)
+                .load_dir(&directory)
+                .map_err(|error| error.message)?;
+        }
+    } else {
+        let index = lock_plugins(&state)
+            .plugins()
+            .iter()
+            .position(|plugin| plugin.manifest.id == plugin_id);
+        if let Some(index) = index {
+            lock_plugins(&state)
+                .unload(index)
+                .map_err(|error| error.message)?;
+        }
+    }
+
+    let mut library = lock_library(&state.library);
+    library.settings.disabled_plugins.retain(|id| id != &plugin_id);
+    if !enabled {
+        library.settings.disabled_plugins.push(plugin_id.clone());
+    }
+    let _ = library.save(&state.library_path());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn open_plugins_folder(state: State<'_, AppState>) -> Result<(), String> {
+    let directory = state.data_dir.join("plugins");
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    reveal_in_file_manager(&directory)
+}
+
+#[cfg(windows)]
+fn reveal_in_file_manager(path: &std::path::Path) -> Result<(), String> {
+    std::process::Command::new("explorer")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn reveal_in_file_manager(path: &std::path::Path) -> Result<(), String> {
+    std::process::Command::new("open")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn reveal_in_file_manager(path: &std::path::Path) -> Result<(), String> {
+    std::process::Command::new("xdg-open")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// Locate a plugin on disk by its id, across every search path.
+fn find_plugin_directory(state: &AppState, plugin_id: &str) -> Option<std::path::PathBuf> {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|parent| parent.to_path_buf()));
+
+    for path in plugin_search_paths(exe_dir.as_deref(), &state.data_dir) {
+        let Ok(entries) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let directory = entry.path();
+            if !directory.is_dir() {
+                continue;
+            }
+            if let Ok(manifest) = poddies_plugin_host::worker::load_manifest(&directory) {
+                if manifest.id == plugin_id {
+                    return Some(directory);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn playback_event(state: &AppState, episode_id: &str, position_secs: f64) -> Option<PlaybackEvent> {

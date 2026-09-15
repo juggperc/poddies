@@ -32,6 +32,8 @@ Easy to set up and use on all platforms.
   new episodes costs nothing when nothing changed. Add a feed from the dialog in
   the sidebar, and drop one from the same row on hover.
 - **Search** — your whole library, plus [Apple Podcasts](https://itunes.apple.com/search)
+  over its public endpoint, no key and no account, so you can find and add shows
+  you haven't subscribed to yet.
   
 
   <p align="left">
@@ -39,23 +41,29 @@ Easy to set up and use on all platforms.
   </p>
 
 - **Discovery that shows its work.** Adjust your own algorithm to your liking in detail!
-- **A plugin system that is genuinely easy** — You can basically make this your own app with a little time (or Claude)
-- **Featherweight** — 8.9 MB exe, ~26 KB of js, light and easy on ur cpu :)
+- **A plugin system that is genuinely easy** — You can basically make this your own app with a little time (or Claude). Switch plugins on and off from Settings and it takes effect straight away, no restart.
+- **Featherweight** — 9.7 MB exe, ~27 KB of js, light and easy on ur cpu :)
   
 
 ## Quickstart Guide
 Just install from Releases. If you want to build it yourself:
 
 ```powershell
-# the UI must be compiled first: Tauri embeds it into the exe
-cd app ; pnpm install ; pnpm build ; cd ..
+# builds the portable exe and the Windows installer into .\dist
+pwsh scripts\build-release.ps1
+```
 
-# the deliverable
+Or just the portable binary — the UI must be compiled first, because Tauri
+embeds it into the exe:
+
+```powershell
+cd app ; pnpm install ; pnpm build ; cd ..
 cargo build --release -p poddies
 ```
 
 ```
-target\release\poddies.exe      # 8.9 MB, single portable executable
+dist\poddies.exe                    # portable, no install
+dist\Poddies_0.1.0_x64-setup.exe    # per-user installer, no admin prompt
 ```
 
 Development uses the Vite dev server instead of the embedded bundle — disable the
@@ -115,6 +123,11 @@ lifecycle, each built as a real `.dll`:
 | **Listening Stats** | `ui-panel`, `library-read` | host calls, aggregating history, declarative widgets |
 | **Apple Podcasts** | `discovery-source` | feeding the Discovery queue from the public Apple Podcasts API (no key), caching, offline fallback |
 
+Settings lists every plugin with its state and a Reload button, and lets you
+disable one: it stops at once, its panel leaves the sidebar, and it contributes
+nothing to Discovery until you enable it again. The choice survives a restart.
+"Open folder" shows you where to drop a plugin.
+
 | | |
 |---|---|
 | API reference | [`docs/plugin-api.md`](docs/plugin-api.md) |
@@ -145,6 +158,7 @@ crates/poddies-plugin-host/  the sandboxed worker and its manager
 crates/poddies-cli/          scaffolding, dev loop, validation
 app/                         the Tauri host and the interface
 python/poddies/              the Python plugin SDK
+scripts/build-release.ps1    portable bundle + Windows installer
 docs/                        authoring guide, API reference, architecture
 ```
 
