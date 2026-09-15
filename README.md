@@ -164,7 +164,7 @@ docs/                        authoring guide, API reference, architecture
 ```
 
 ```powershell
-cargo test --workspace      # 40 tests across five crates
+cargo test --workspace      # 43 tests across five crates
 cargo clippy --workspace --all-targets
 ```
 
