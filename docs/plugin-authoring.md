@@ -283,7 +283,7 @@ novelty, length fit, an explicit filter and variety — all of which the user ca
 see and adjust. A plugin that tries to smuggle in an opaque ordering achieves
 nothing. `popularity` exists only as a deterministic tie-breaker.
 
-The reference `poddies-plugin-discover` plugin is a complete example: it queries
+The reference `poddies-plugin-apple-podcasts` plugin is a complete example: it queries
 the public iTunes Search API per topic, caches results, and falls back to a
 curated list when the network is unavailable.
 

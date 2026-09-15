@@ -385,7 +385,7 @@ input {
    5. Library navigation
    -------------------------------------------------------------------------- */
 .nav {
-  padding: var(--step-4) var(--step-3) var(--step-3);
+  padding: var(--step-2) var(--step-3) var(--step-3);
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -477,13 +477,13 @@ input {
 /* Search sits at the top of the library pane, above the navigation. */
 .searchbox {
   position: relative;
-  margin: 0 var(--step-3) var(--step-3);
+  margin: var(--step-3) var(--step-3) var(--step-2);
 }
 
 .searchbox__input {
   width: 100%;
   height: 32px;
-  padding: 0 10px 0 30px;
+  padding: 0 30px 0 30px;
   border-radius: var(--radius);
   border: 1px solid var(--line);
   background: var(--surface-1);
@@ -509,7 +509,7 @@ input {
   box-shadow: 0 0 0 3px var(--surface-2);
 }
 
-/* The magnifier, drawn with a pseudo-element so no extra element is needed. */
+/* The magnifier, drawn with pseudo-elements so no extra element is needed. */
 .searchbox::before {
   content: "";
   position: absolute;
@@ -543,6 +543,32 @@ input {
 
 .searchbox:focus-within::after {
   background: var(--text-mid);
+}
+
+/* A typographic × that appears only while there is something to clear. */
+.searchbox__clear {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  display: none;
+  place-items: center;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-lo);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+
+.searchbox__clear.is-visible {
+  display: grid;
+}
+
+.searchbox__clear:hover {
+  background: var(--surface-2);
+  color: var(--text-hi);
 }
 
 .searchless {
@@ -840,6 +866,7 @@ input {
 .discovery__source {
   font-size: 11px;
   color: var(--text-lo);
+  white-space: nowrap;
 }
 
 /* --------------------------------------------------------------------------

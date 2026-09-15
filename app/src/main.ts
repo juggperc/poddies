@@ -53,7 +53,7 @@ const state = {
   pluginsDir: "",
   query: "",
   search: { shows: [], episodes: [], web: [] } as SearchView,
-  searching: false,
+  searchPending: false,
   discovery: [] as DiscoveryItemView[],
   discoveryLoading: false,
   weights: { ...DEFAULT_WEIGHTS },
@@ -212,6 +212,7 @@ function fmtDate(iso: string | null): string {
 const dom = {
   app: document.getElementById("app") as HTMLElement,
   library: document.getElementById("pane-library") as HTMLElement,
+  libraryScroll: document.getElementById("library-scroll") as HTMLElement,
   middle: document.getElementById("pane-middle") as HTMLElement,
   now: document.getElementById("pane-now") as HTMLElement,
   titlebar: document.querySelector(".titlebar") as HTMLElement,
@@ -220,54 +221,83 @@ const dom = {
   settings: document.getElementById("btn-settings") as HTMLButtonElement,
   minimize: document.getElementById("btn-minimize") as HTMLButtonElement,
   close: document.getElementById("btn-close") as HTMLButtonElement,
-  search: document.createElement("input"),
+  search: document.getElementById("library-search") as HTMLInputElement,
+  searchClear: document.getElementById("library-search-clear") as HTMLButtonElement,
+  addForm: null as HTMLElement | null,
 };
 
 function installSearchField(): void {
   const input = dom.search;
-  input.type = "text";
-  input.placeholder = "Search";
-  input.spellcheck = false;
-  input.className = "searchbox__input";
-  input.setAttribute("aria-label", "Search your library");
-  input.autocomplete = "off";
+  input.enterKeyHint = "search";
 
-  let timer: number | undefined;
-  input.addEventListener("input", () => {
-    window.clearTimeout(timer);
-    timer = window.setTimeout(() => void runSearch(dom.search.value), 160);
-  });
+  input.addEventListener("input", onSearchInput);
   input.addEventListener("keydown", (event) => {
-    if (event.key !== "Escape") return;
+    if (event.key === "Escape") {
+      input.value = "";
+      onSearchInput();
+    }
+  });
+
+  // Mousedown is what normally blurs the field before the click lands; stop
+  // that so clearing keeps the caret.
+  dom.searchClear.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+  });
+  dom.searchClear.addEventListener("click", () => {
     input.value = "";
-    void runSearch("");
+    onSearchInput();
   });
 }
 
-/** Push a query to the host and open the results pane.
- *
- * An empty query ends the search: the results are dropped and, if the search
- * pane is what is open, the view falls back to the latest episodes.
+function renderSearchClear(): void {
+  dom.searchClear.classList.toggle("is-visible", dom.search.value !== "");
+}
+
+let searchSeq = 0;
+let searchDebounce: number | undefined;
+
+/** The "Matching shows" rail updates instantly from state — no rebuild, no
+ * await, so typing into the field is never interrupted. The full results pane
+ * (episodes + Apple Podcasts) follows on a short debounce.
  */
-async function runSearch(query: string): Promise<void> {
+function onSearchInput(): void {
+  const query = dom.search.value;
   state.query = query;
+  renderSearchClear();
+  window.clearTimeout(searchDebounce);
 
   if (query === "") {
     state.search = { shows: [], episodes: [], web: [] };
+    state.searchPending = false;
     if (state.route.kind === "search") state.route = { kind: "latest" };
     render();
     return;
   }
 
+  state.searchPending = true;
+  if (state.route.kind !== "search") state.route = { kind: "search" };
+  renderLibrary(); // reroutes the "Matching shows" rail from the last snapshot
+
+  searchDebounce = window.setTimeout(() => void runSearch(query), 60);
+}
+
+async function runSearch(query: string): Promise<void> {
+  const seq = ++searchSeq;
+
+  let result: SearchView;
   try {
-    state.search = await api.search(query);
+    result = await api.search(query);
   } catch {
-    state.search = { shows: [], episodes: [], web: [] };
+    result = { shows: [], episodes: [], web: [] };
   }
-  if (state.route.kind !== "search") {
-    state.route = { kind: "search" };
-  }
-  render();
+  if (seq !== searchSeq) return;
+  if (query !== state.query) return;
+
+  state.search = result;
+  state.searchPending = false;
+  if (state.route.kind !== "search") state.route = { kind: "search" };
+  renderLibrary();
+  renderMiddle();
 }
 
 let statusTimer: number | undefined;
@@ -466,7 +496,7 @@ function renderLibrary(): void {
     ),
   );
 
-  const scroll = el("div", { class: "pane__scroll" }, [
+  const scroll: Node[] = [
     ...(failed.length > 0
       ? [
           el("div", { class: "notice" }, [
@@ -474,44 +504,47 @@ function renderLibrary(): void {
           ]),
         ]
       : []),
-    el("div", { class: "searchbox" }, [dom.search]),
     el("div", { class: "nav" }, primary),
     el("div", { class: "hairline" }),
-  ]);
+  ];
 
   if (state.query !== "") {
-    if (subscriptions.length > 0 || state.search.episodes.length > 0) {
-      scroll.append(
+    if (state.searchPending) {
+      scroll.push(el("div", { class: "searchless" }, ["Searching…"]));
+    } else if (subscriptions.length > 0 || state.search.episodes.length > 0) {
+      scroll.push(
         el("div", { class: "section-label", text: "Matching shows" }),
         subscriptions.length > 0
           ? el("div", { class: "nav" }, subscriptions)
           : el("p", { class: "searchless", text: "No shows match." }),
       );
     } else {
-      scroll.append(
+      scroll.push(
         el("div", { class: "searchless" }, ["Nothing in your library matches."]),
       );
     }
-    scroll.append(el("div", { class: "hairline" }));
+    scroll.push(el("div", { class: "hairline" }));
   } else if (subscriptions.length > 0) {
-    scroll.append(
+    scroll.push(
       el("div", { class: "section-label", text: "Subscriptions" }),
       el("div", { class: "nav" }, subscriptions),
     );
   } else {
-    scroll.append(
+    scroll.push(
       el("div", { class: "empty" }, [
         el("p", { class: "empty__body", text: "Add a feed address below to start your library." }),
       ]),
     );
   }
 
-  scroll.append(
+  scroll.push(
     el("div", { class: "hairline" }),
     navItem("settings", GLYPH.settings, "Settings", "", () => setRoute({ kind: "settings" })),
   );
 
-  dom.library.replaceChildren(scroll, addForm());
+  // The search field and the add form live outside this scroll region, so a
+  // rebuild never touches a focused input.
+  dom.libraryScroll.replaceChildren(...scroll);
 }
 
 function navItem(
@@ -1316,6 +1349,11 @@ async function boot(): Promise<void> {
   installAudioHandlers();
   installSearchField();
   installWindowDragging();
+
+  // The add-feed form is created once and kept: its input must not reset on a
+  // library re-render.
+  dom.addForm = addForm();
+  dom.library.appendChild(dom.addForm);
 
   dom.minimize.addEventListener("click", () => void api.appHide());
   dom.close.addEventListener("click", () => void api.appHide());

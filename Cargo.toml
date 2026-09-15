@@ -7,7 +7,7 @@ members = [
     "crates/poddies-plugin-host",
     "crates/poddies-cli",
     "plugins/poddies-plugin-stats",
-    "plugins/poddies-plugin-discover",
+    "plugins/poddies-plugin-apple-podcasts",
     "app/src-tauri",
 ]
 
@@ -17,7 +17,7 @@ edition = "2021"
 rust-version = "1.82"
 license = "MIT"
 authors = ["Poddies"]
-repository = "https://github.com/poddies/poddies"
+repository = "https://github.com/juggperc/poddies"
 
 [profile.release]
 opt-level = "s"

@@ -45,7 +45,14 @@
         </header>
 
         <main class="panes">
-          <nav id="pane-library" class="pane pane--library" aria-label="Library"></nav>
+          <nav id="pane-library" class="pane pane--library" aria-label="Library">
+            <div class="searchbox">
+              <input id="library-search" class="searchbox__input" type="text" placeholder="Search" spellcheck="false" autocomplete="off" />
+              <button id="library-search-clear" class="searchbox__clear" type="button" aria-label="Clear search">&#215;</button>
+            </div>
+            <div id="library-scroll" class="pane__scroll"></div>
+            <!-- The add-feed form is appended here once at startup. -->
+          </nav>
           <section id="pane-middle" class="pane pane--middle" aria-label="Content"></section>
           <aside id="pane-now" class="pane pane--now" aria-label="Now playing"></aside>
         </main>

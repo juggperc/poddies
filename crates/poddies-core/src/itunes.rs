@@ -1,9 +1,9 @@
 //! Apple Podcasts search over the public iTunes Search API.
 //!
 //! Unauthenticated: `GET https://itunes.apple.com/search?media=podcast&term=…`.
-//! No key, no account. This is an object lookup — the user asked for a specific
-//! thing — not a recommendation, so it stays out of the Discovery pipeline,
-//! which remains plugin-fed and ranked by the user's own history.
+//! No key, no account. Two consumers share this lookup: in-app search, and the
+//! Apple Podcasts discovery plugin. Neither scores anything here — Discovery
+//! ranking stays in the host, plugin-fed and ranked by the user's own history.
 //!
 //! `parse` is split from the network call so the response shape can be tested
 //! without touching the network.
@@ -18,7 +18,7 @@ use crate::error::{CoreError, Result};
 
 pub const ENDPOINT: &str = "https://itunes.apple.com/search";
 
-/// The app shows this on results, next to plugin ids like `dev.poddies.discover`.
+/// The app shows this on results, next to plugin ids like `dev.poddies.apple-podcasts`.
 pub const SOURCE: &str = "apple podcasts";
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(4);

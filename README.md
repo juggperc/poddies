@@ -119,7 +119,7 @@ lifecycle, each built as a real `.dll`:
 | Plugin | Capability | Demonstrates |
 |---|---|---|
 | **Listening Stats** | `ui-panel`, `library-read` | host calls, aggregating history, declarative widgets |
-| **Discover** | `discovery-source` | feeding the Discovery queue from the public iTunes API, caching, offline fallback |
+| **Apple Podcasts** | `discovery-source` | feeding the Discovery queue from the public Apple Podcasts API (no key), caching, offline fallback |
 
 | | |
 |---|---|

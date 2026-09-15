@@ -1,0 +1,10 @@
+{
+  "id": "dev.poddies.apple-podcasts",
+  "name": "Apple Podcasts",
+  "version": "0.1.0",
+  "protocol": "1.0",
+  "description": "Discovery candidates from Apple Podcasts, with a curated offline fallback.",
+  "author": "Poddies",
+  "capabilities": ["discovery-source"],
+  "runtime": { "kind": "native", "library": "poddies_plugin_apple_podcasts.dll" }
+}
